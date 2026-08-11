@@ -147,6 +147,40 @@ const (
 
 	// TestCordonAnnotation marks nodes cordoned by the test for cleanup identification.
 	TestCordonAnnotation = "system-tests.medik8s.io/cordoned-for-topology-test"
+
+	// MustGatherImageEnvVar is the environment variable that overrides the must-gather image.
+	MustGatherImageEnvVar = "MUST_GATHER_IMAGE"
+	// DefaultMustGatherImage is the default medik8s must-gather container image.
+	// The :latest tag is intentional: this suite validates that must-gather collects
+	// the correct FAR data using the build a customer would actually pull, not a
+	// pinned must-gather version. The resolved image digest is logged on every run
+	// (see farutils.RunMustGather) so a failure is reproducible against the exact
+	// build, and MUST_GATHER_IMAGE overrides this default when a specific ref is needed.
+	DefaultMustGatherImage = "quay.io/medik8s/must-gather:latest"
+	// MustGatherTimeout is how long to allow `oc adm must-gather` to run.
+	MustGatherTimeout = 10 * time.Minute
+
+	// TimedOutBadInstanceID is an invalid AWS EC2 instance ID that forces fence_aws
+	// to fail with InvalidInstanceID.NotFound on every retry attempt.
+	TimedOutBadInstanceID = "i-00000000000000000"
+	// TimedOutLogPattern matches per-retry fence agent failure log entries.
+	// The FAR controller logs FenceAgentFailedCommandMessage ("command failed")
+	// exactly once per failed retry in cliexecuter.go runWithRetry().
+	TimedOutLogPattern = `command failed`
+	// TimedOutRetryBuffer is extra time per retry to account for fence agent execution overhead.
+	TimedOutRetryBuffer = 30 * time.Second
+	// ControllerPodReadyTimeout is how long to wait for controller pods to become Ready after deletion.
+	ControllerPodReadyTimeout = 2 * time.Minute
+
+	// MinWorkersForObservabilityTests is the minimum number of Ready worker nodes the
+	// observability suite requires: ExpectedReplicas (the FAR controller pods, spread
+	// across that many distinct nodes for HA per OCP-61222) plus 1. The must-gather spec
+	// reboots a randomly selected non-leader worker (SelectWorkerNode excludes only the
+	// leader), which may be the node hosting the second replica; OutOfServiceTaint then
+	// evicts that replica, and anti-affinity forbids the leader's node, so a spare Ready
+	// worker must exist for it to reschedule onto while the target reboots. The timed-out
+	// spec needs only ExpectedReplicas nodes; this gate is driven by must-gather.
+	MinWorkersForObservabilityTests = int(ExpectedReplicas) + 1
 )
 
 // WorkloadTestImage is the container image used for test workload pods.
