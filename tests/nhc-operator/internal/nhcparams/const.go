@@ -168,4 +168,48 @@ const (
 
 	// NHCReasonRemediating is the expected reason substring during active remediation.
 	NHCReasonRemediating = "remediating"
+
+	// Escalation test constants (RHWA-1245).
+
+	// NHCEscalationTestName is the NHC CR name for escalation tests.
+	NHCEscalationTestName = "nhc-test-escalation"
+
+	// NHCEscalationEditTestName is the NHC CR name for the edit-during-remediation test.
+	NHCEscalationEditTestName = "nhc-test-escalation-edit"
+
+	// NHCEscalationValidationPrefix is the NHC CR name prefix for escalation validation tests.
+	NHCEscalationValidationPrefix = "nhc-test-esc-val"
+
+	// EscalationMinTimeout is the minimum timeout enforced by the NHC webhook (60s).
+	EscalationMinTimeout = 60 * time.Second
+
+	// EscalationFirstStepTimeout is the timeout string for the first escalation step in functional tests.
+	EscalationFirstStepTimeout = "60s"
+
+	// EscalationLongTimeout is a long timeout string for TestRemediation steps
+	// where we need remediation to remain in-progress for the duration of a test.
+	EscalationLongTimeout = "600s"
+
+	// EscalationWaitTimeout is the maximum time to wait for escalation to occur
+	// (first step timeout + detection lag + buffer).
+	EscalationWaitTimeout = 5 * time.Minute
+
+	// EscalationWebhookOrderRequired is the expected webhook error when order is omitted.
+	EscalationWebhookOrderRequired = "order"
+
+	// EscalationWebhookDuplicateOrder is the expected webhook error for duplicate order values.
+	EscalationWebhookDuplicateOrder = "duplicate order"
+
+	// EscalationWebhookTimeoutRequired is the expected webhook error when timeout is omitted.
+	EscalationWebhookTimeoutRequired = "timeout"
+
+	// EscalationWebhookTimeoutMinimum is the expected webhook error for timeout < 60s.
+	EscalationWebhookTimeoutMinimum = "at least"
+
+	// EscalationWebhookDuplicateKind is the expected webhook error for duplicate remediator Kind.
+	EscalationWebhookDuplicateKind = "same kind"
+
+	// EscalationWebhookUpdateProhibited is the expected webhook error when editing
+	// escalating remediations while remediation is in progress.
+	EscalationWebhookUpdateProhibited = "escalating remediations"
 )

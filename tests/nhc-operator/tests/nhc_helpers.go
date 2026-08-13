@@ -161,12 +161,12 @@ func buildNHC(name, selectorKey, selectorOp string, matchLabels map[string]inter
 // isSNRCRDInstalled checks whether the SelfNodeRemediation CRD is registered.
 func isSNRCRDInstalled(ctx context.Context) bool {
 	crd := &apiextensionsv1.CustomResourceDefinition{}
+
 	err := APIClient.Get(
 		ctx,
 		types.NamespacedName{Name: nhcparams.SNRCRDName},
 		crd,
 	)
-
 	if err == nil {
 		return true
 	}
@@ -336,6 +336,7 @@ func waitForSNRRemediationComplete(
 			case err == nil:
 				if !snrSeen {
 					GinkgoWriter.Printf("SNR CR %s detected -- remediation in progress\n", nodeName)
+
 					snrSeen = true
 				}
 
@@ -656,6 +657,148 @@ func buildNHCWithTestRemediation(name string) *unstructured.Unstructured {
 	return nhc
 }
 
+// escalationStep describes one remediator entry for buildNHCWithEscalation.
+type escalationStep struct {
+	templateAPIVersion string
+	templateKind       string
+	templateName       string
+	templateNamespace  string
+	order              int
+	timeout            string
+}
+
+// remediatorConfig holds the template coordinates for a remediator type.
+type remediatorConfig struct {
+	apiVersion string
+	kind       string
+	name       string
+	namespace  string
+}
+
+var snrRemediator = remediatorConfig{
+	apiVersion: nhcparams.SNRCRDGroup + "/" + nhcparams.SNRCRDVersion,
+	kind:       "SelfNodeRemediationTemplate",
+	name:       nhcparams.SNRTemplateName,
+	namespace:  medik8sparams.OperatorNs,
+}
+
+var testRemediator = remediatorConfig{
+	apiVersion: nhcparams.TestRemediationGroup + "/" + nhcparams.TestRemediationVersion,
+	kind:       "TestRemediationTemplate",
+	name:       nhcparams.TestRemediationTemplateName,
+}
+
+// newEscalationStep returns a typed escalation step for the given remediator.
+func newEscalationStep(remediator remediatorConfig, order int, timeout string) escalationStep {
+	return escalationStep{
+		templateAPIVersion: remediator.apiVersion,
+		templateKind:       remediator.kind,
+		templateName:       remediator.name,
+		templateNamespace:  remediator.namespace,
+		order:              order,
+		timeout:            timeout,
+	}
+}
+
+// snrEscalationStep returns an escalation step configured for SNR.
+func snrEscalationStep(order int, timeout string) escalationStep {
+	return newEscalationStep(snrRemediator, order, timeout)
+}
+
+// testRemediationEscalationStep returns an escalation step configured for TestRemediation.
+func testRemediationEscalationStep(order int, timeout string) escalationStep {
+	return newEscalationStep(testRemediator, order, timeout)
+}
+
+// buildNHCWithEscalation builds an NHC CR that uses escalatingRemediations
+// instead of a single remediationTemplate. The unhealthy condition duration
+// is set to 30s for faster test cycles.
+func buildNHCWithEscalation(name string, steps []escalationStep) *unstructured.Unstructured {
+	nhc := buildNHCForWorkers(name)
+	spec := nhcSpec(nhc)
+
+	delete(spec, "remediationTemplate")
+
+	escalations := make([]interface{}, len(steps))
+	for i, s := range steps {
+		tmpl := map[string]interface{}{
+			"apiVersion": s.templateAPIVersion,
+			"kind":       s.templateKind,
+			"name":       s.templateName,
+		}
+		if s.templateNamespace != "" {
+			tmpl["namespace"] = s.templateNamespace
+		}
+
+		escalations[i] = map[string]interface{}{
+			"remediationTemplate": tmpl,
+			"order":               int64(s.order),
+			"timeout":             s.timeout,
+		}
+	}
+
+	spec["escalatingRemediations"] = escalations
+
+	spec["unhealthyConditions"] = []interface{}{
+		map[string]interface{}{
+			"type": "Ready", "status": "False", "duration": "30s",
+		},
+		map[string]interface{}{
+			"type": "Ready", "status": "Unknown", "duration": "30s",
+		},
+	}
+
+	return nhc
+}
+
+// buildNHCWithEscalationRaw builds an NHC CR with a raw escalatingRemediations
+// slice for negative validation tests that need intentionally invalid specs
+// (e.g., missing required fields, duplicate values).
+func buildNHCWithEscalationRaw(name string, rawSteps []map[string]interface{}) *unstructured.Unstructured {
+	nhc := buildNHCForWorkers(name)
+	spec := nhcSpec(nhc)
+
+	delete(spec, "remediationTemplate")
+
+	steps := make([]interface{}, len(rawSteps))
+	for i, s := range rawSteps {
+		steps[i] = s
+	}
+
+	spec["escalatingRemediations"] = steps
+
+	return nhc
+}
+
+// newEscalationStepRaw returns a raw escalation step map for the given remediator.
+// Callers can delete keys to create intentionally invalid specs.
+func newEscalationStepRaw(remediator remediatorConfig, order int64, timeout string) map[string]interface{} {
+	tmpl := map[string]interface{}{
+		"apiVersion": remediator.apiVersion,
+		"kind":       remediator.kind,
+		"name":       remediator.name,
+	}
+	if remediator.namespace != "" {
+		tmpl["namespace"] = remediator.namespace
+	}
+
+	return map[string]interface{}{
+		"remediationTemplate": tmpl,
+		"order":               order,
+		"timeout":             timeout,
+	}
+}
+
+// validEscalationStepRaw returns a valid raw escalation step for SNR.
+func validEscalationStepRaw(order int64, timeout string) map[string]interface{} {
+	return newEscalationStepRaw(snrRemediator, order, timeout)
+}
+
+// testRemediationStepRaw returns a valid raw escalation step for TestRemediation.
+func testRemediationStepRaw(order int64, timeout string) map[string]interface{} {
+	return newEscalationStepRaw(testRemediator, order, timeout)
+}
+
 // testRemediationCRExists checks if a TestRemediation CR exists for the given node.
 // Returns (bool, error) so Gomega propagates API failures instead of treating
 // transient errors as "not found".
@@ -780,7 +923,6 @@ func verifyNHCNotCreated(ctx context.Context, nhcName string) {
 	notCreated.SetGroupVersionKind(nhcGVK)
 
 	getErr := APIClient.Get(ctx, client.ObjectKey{Name: nhcName}, notCreated)
-
 	if getErr == nil {
 		Fail(fmt.Sprintf("NHC CR %q exists but should not have been created", nhcName))
 	}

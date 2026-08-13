@@ -280,6 +280,7 @@ var _ = Describe("NHC Functional -- Remediation Trigger and CR Lifecycle",
 				By("Finding the node hosting the active NHC controller")
 
 				var err error
+
 				nhcControllerNodeName, err = helpers.GetActiveControllerNode(
 					ctx, APIClient, nhcparams.ControllerLeaseName, medik8sparams.OperatorNs)
 				Expect(err).ToNot(HaveOccurred(),
@@ -371,7 +372,6 @@ var _ = Describe("NHC Functional -- Remediation Trigger and CR Lifecycle",
 				// remediated by TestRemediation.
 				// SSH availability is checked in BeforeAll; this test uses SSH
 				// to restart kubelet because TestRemediation has no controller.
-
 				By("Setting up TestRemediation dummy CRDs and RBAC")
 
 				setupTestRemediationResources(ctx)
@@ -457,7 +457,6 @@ var _ = Describe("NHC Functional -- Remediation Trigger and CR Lifecycle",
 				// first via SNR; the slower one (11s) should NOT start remediating.
 				// Deleting the non-remediating NHC should succeed.
 				// Recovery is automatic: SNR reboots the node.
-
 				By("Creating first SNR-based NHC CR (10s, triggers first)")
 
 				nhcFirst := buildNHCForWorkers(nhcparams.NHCSecondTestName)
