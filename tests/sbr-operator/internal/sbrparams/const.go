@@ -285,6 +285,32 @@ const (
 
 	// MustGatherCleanupTimeout is the deadline for best-effort cleanup of leftover must-gather namespaces.
 	MustGatherCleanupTimeout = 2 * time.Minute
+
+	// ControllerLeaseName is the SBR leader election lease name (LeaderElectionID in cmd/main.go).
+	ControllerLeaseName = "sbr-operator-leader-election"
+
+	// ControllerHandoverTimeout is how long to wait for controller leadership transfer after pod deletion.
+	ControllerHandoverTimeout = 3 * time.Minute
+
+	// MinWorkerNodesForResilienceTest is the minimum number of worker-only nodes required to
+	// safely run the controller resilience test (cordon all but one) without touching control-plane capacity.
+	MinWorkerNodesForResilienceTest = 3
+
+	// ControllerRescheduleTimeout is how long to wait for the controller to reach a stable degraded
+	// state (>= 1 ready replica) after cordoning workers and deleting pods from cordoned nodes.
+	ControllerRescheduleTimeout = 5 * time.Minute
+
+	// ControllerScaleBackTimeout is how long to wait for the controller deployment to return to
+	// ExpectedReplicas after uncordoning all worker nodes.
+	ControllerScaleBackTimeout = 5 * time.Minute
+
+	// ControllerDegradedConsistentDuration is how long to Consistently assert the controller
+	// remains available during the single-worker degraded phase.
+	ControllerDegradedConsistentDuration = 30 * time.Second
+
+	// MinWorkerNodesForHandoverTest is the minimum number of schedulable worker-only nodes
+	// required for the leadership handover test (needs 2 replicas on different nodes).
+	MinWorkerNodesForHandoverTest = 2
 )
 
 // AgentExpectedMetricNames lists the Prometheus metric names that must be present in the agent output.

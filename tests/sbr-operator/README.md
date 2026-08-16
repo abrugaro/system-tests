@@ -151,3 +151,33 @@ MachineHealthCheck resources.
   to an accessible mirrored image
 - **Standalone**: `ginkgo --label-filter="sbr" --focus="must-gather" ./tests/sbr-operator/...`
 - **Pass criteria**: SBR deployment is Ready; must-gather completes successfully; output contains node YAMLs for all cluster nodes, all 3 SBR CRD definition files, and MachineHealthCheck data
+
+### 10. Verify Controller Availability With One Worker (Controller Resilience)
+
+Validates that the SBR controller maintains at least one available replica when all but one
+worker node is cordoned. The SBR deployment uses `topologySpreadConstraints` with
+`whenUnsatisfiable: DoNotSchedule`, so only one replica can schedule on a single node.
+
+The test cordons all eligible workers except one, deletes controller pods from cordoned nodes,
+and verifies the surviving replica stays available throughout the degraded phase. After
+uncordoning, verifies the deployment scales back to the expected replica count on different nodes.
+
+- **Operators**: SBR v0.3.0
+- **Cluster**: 3+ schedulable worker-only nodes (standard AWS Prow cluster)
+- **Storage**: None
+- **Environment**: Connected or disconnected
+- **Standalone**: `ginkgo --label-filter="sbr" --focus="controller availability with one worker" ./tests/sbr-operator/...`
+- **Pass criteria**: At least 1 controller pod remains Running on the uncordoned node; availability sustained for 30s (Consistently); deployment scales back to 2 replicas on different nodes after uncordoning
+
+### 11. Verify Controller Leadership Handover
+
+Validates that when the active SBR controller pod (the lease holder) is deleted, leadership
+transfers to a different controller pod. Follows the same pattern as the FAR controller
+lifecycle test (OCP-70636).
+
+- **Operators**: SBR v0.3.0
+- **Cluster**: Any topology with at least 2 worker nodes
+- **Storage**: None
+- **Environment**: Connected or disconnected
+- **Standalone**: `ginkgo --label-filter="sbr" --focus="controller leadership" ./tests/sbr-operator/...`
+- **Pass criteria**: Lease `holderIdentity` changes to a different Running controller pod; deployment returns to full ready replicas
