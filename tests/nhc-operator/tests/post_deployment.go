@@ -141,6 +141,12 @@ var _ = Describe(
 				Expect(hasValidSubscription).To(BeTrue(),
 					"CSV should have operators.openshift.io/valid-subscription annotation")
 
+				By("Checking certified annotation")
+
+				_, hasCertified := annotations["operators.openshift.io/certified"]
+				Expect(hasCertified).To(BeTrue(),
+					"CSV should have operators.openshift.io/certified annotation")
+
 				By("Checking support annotation")
 
 				supportValue, hasSupport := annotations["support"]
@@ -205,13 +211,9 @@ var _ = Describe(
 				By("Checking replaces field when present")
 
 				replaces := nhcCSV.Object.Spec.Replaces
-				if replaces != "" {
-					Expect(replaces).To(ContainSubstring(nhcparams.CSVNamePattern),
-						"replaces field should contain %q, got %q", nhcparams.CSVNamePattern, replaces)
-				} else {
-					GinkgoWriter.Printf("CSV %q has empty spec.replaces (expected on first install)\n",
-						nhcCSV.Object.Name)
-				}
+				Expect(replaces).ToNot(BeEmpty(), "CSV spec.replaces should not be empty")
+				Expect(replaces).To(HavePrefix("node-healthcheck-operator.v99."),
+					"replaces field should reference v99 release, got %q", replaces)
 
 				By("Checking cluster topology for replica validation")
 
@@ -273,6 +275,11 @@ var _ = Describe(
 
 				runningPods := helpers.FilterRunningPods(nhcPods)
 				Expect(runningPods).ToNot(BeEmpty(), "No running NHC controller pods found")
+
+				By("Verifying NHC controller pod count matches expected minimum")
+
+				Expect(len(runningPods)).To(BeNumerically(">=", 5),
+					"Expected at least 5 running NHC controller pods, found %d", len(runningPods))
 
 				errorMessages := helpers.ValidateNonRootSecurityContext(
 					runningPods, nhcparams.ManagerContainerName, true)
