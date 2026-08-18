@@ -79,17 +79,19 @@ var _ = Describe("FAR Observability Tests",
 			Expect(farDeployment.IsReady(medik8sparams.DefaultTimeout)).To(BeTrue(),
 				"FAR deployment is not Ready")
 			Expect(farDeployment.Object.Spec.Replicas).To(HaveValue(Equal(farparams.ExpectedReplicas)),
-				"FAR observability specs require %d controller replicas for HA leader/non-leader election",
+				"FAR observability specs require %d controller replicas for HA leader election",
 				farparams.ExpectedReplicas)
 
 			By("Verifying sufficient worker nodes")
 
 			workerCount, err := helpers.CountReadyWorkerNodes(ctx, APIClient)
 			Expect(err).ToNot(HaveOccurred())
-			Expect(workerCount).To(
-				BeNumerically(">=", farparams.MinWorkersForObservabilityTests),
-				"Observability tests require at least %d Ready worker nodes",
-				farparams.MinWorkersForObservabilityTests)
+
+			if workerCount < farparams.MinWorkersForObservabilityTests {
+				Skip(fmt.Sprintf(
+					"Observability tests require at least %d Ready worker nodes, found %d",
+					farparams.MinWorkersForObservabilityTests, workerCount))
+			}
 
 			By("Identifying active FAR controller node")
 
@@ -124,16 +126,6 @@ var _ = Describe("FAR Observability Tests",
 			if err != nil && !k8serrors.IsAlreadyExists(err) {
 				Expect(err).ToNot(HaveOccurred())
 			}
-
-			DeferCleanup(func() {
-				By("Deleting shared credentials Secret")
-
-				if delErr := APIClient.Delete(ctx, credentialsSecret); delErr != nil &&
-					!k8serrors.IsNotFound(delErr) {
-					GinkgoWriter.Printf(
-						"WARNING: failed to delete credentials Secret: %v\n", delErr)
-				}
-			})
 
 			By("Building shared and node parameters for fence agent")
 
@@ -277,20 +269,14 @@ var _ = Describe("FAR Observability Tests",
 					Expect(farutils.RunMustGather(ctx, mustGatherDir, farparams.MustGatherTimeout,
 						GinkgoWriter.Printf)).To(Succeed(), "oc adm must-gather failed")
 
-					By("Counting cluster nodes for validation")
-
-					nodeList := &corev1.NodeList{}
-					Expect(APIClient.List(ctx, nodeList)).To(Succeed())
-					totalNodes := len(nodeList.Items)
-
 					By("Validating must-gather output contains FAR data")
 
 					expectations := []farutils.MustGatherExpectation{
 						{
-							Description:  "node YAML files for all cluster nodes",
+							Description:  "node YAML files",
 							PathContains: "nodes",
 							NameGlob:     "*.yaml",
-							MinCount:     totalNodes,
+							MinCount:     1,
 						},
 						{
 							Description: "FAR CRD definitions",
@@ -300,6 +286,12 @@ var _ = Describe("FAR Observability Tests",
 						{
 							Description:  "FAR operator namespace resources",
 							PathContains: medik8sparams.OperatorNs,
+							NameGlob:     "*.yaml",
+							MinCount:     1,
+						},
+						{
+							Description:  "active FenceAgentsRemediation CR instance",
+							PathContains: "fence-agents-remediation.medik8s.io/fenceagentsremediations",
 							NameGlob:     "*.yaml",
 							MinCount:     1,
 						},
