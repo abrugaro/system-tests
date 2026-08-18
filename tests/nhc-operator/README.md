@@ -154,7 +154,7 @@ cluster-scoped CRDs).
 - **Cluster**: Any topology
 - **Environment**: Connected or disconnected
 - **Standalone**: `ginkgo --label-filter="nhc && disruption:nondestructive" --focus="missing template namespace" ./tests/nhc-operator/...`
-- **Pass criteria**: Part 1: NHC Disabled with RemediationTemplateNotFound when namespace missing, Enabled after namespace added, Disabled again after namespace removed with same reason; Part 2: NHC Enabled with cluster-scoped TRT and no namespace
+- **Pass criteria**: Part 1: NHC Disabled with RemediationTemplateNotFound when namespace missing, Enabled after namespace added, Disabled again after namespace removed with same reason; Part 2: NHC Enabled with cluster-scoped TestRemediationTemplate (TRT) and no namespace
 
 ## Non-Destructive Tests -- Template Watch
 
@@ -189,7 +189,7 @@ verifies the full remediation lifecycle with status field tracking.
 
 ### 11. NHC Custom Remediation Template ([OCP-61976](https://polarion.engineering.redhat.com/polarion/#/project/OSE/workitem?id=OCP-61976))
 
-Creates TestRemediation CRDs, RBAC, and an NHC using TRT as the remediator.
+Creates TestRemediation CRDs, RBAC, and an NHC using a TestRemediationTemplate (TRT) as the remediator.
 Verifies pre-remediation status (healthyNodes=N, observedNodes=N, Enabled).
 Stops kubelet, verifies during-remediation status (healthyNodes=N-1,
 observedNodes=N, Remediating), confirms TestRemediation CR created. Starts
@@ -198,7 +198,7 @@ kubelet, verifies post-recovery status and TestRemediation CR cleanup.
 - **Operators**: NHC v0.12.0+
 - **Cluster**: Multi-node (2+ workers), SSH access to worker nodes
 - **Environment**: Connected or disconnected
-- **Standalone**: `ginkgo --label-filter="nhc && disruption:destructive" --focus="custom TRT" ./tests/nhc-operator/...`
+- **Standalone**: `ginkgo --label-filter="nhc && disruption:destructive" --focus="custom TestRemediationTemplate" ./tests/nhc-operator/...`
 - **Pass criteria**: Pre-remediation healthyNodes=N and observedNodes=N with Enabled phase, Remediating after kubelet stop with healthyNodes=N-1, TestRemediation CR created for target node, kubelet starts and node returns to Ready, post-recovery healthyNodes=N and observedNodes=N with Enabled phase, TestRemediation CR deleted
 
 ## Destructive Tests -- Status Field Tracking

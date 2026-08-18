@@ -323,14 +323,14 @@ var _ = Describe("NHC Negative -- Validation and Webhook",
 					cleanupNHCCR(ctx, nhcName)
 					waitForNHCGone(ctx, nhcName)
 
-					By("Part 2: Cluster-scoped template (TRT) without namespace")
+					By("Part 2: Cluster-scoped TestRemediationTemplate (TRT) without namespace")
 
 					By("Setting up TestRemediation CRDs and RBAC")
 
-					setupTestRemediationResources()
-					DeferCleanup(cleanupTestRemediationResources)
+					setupTestRemediationResources(ctx)
+					DeferCleanup(func() { cleanupTestRemediationResources(ctx) })
 
-					By("Creating NHC with cluster-scoped TRT and no namespace in ref")
+					By("Creating NHC with cluster-scoped TestRemediationTemplate and no namespace in ref")
 
 					nhcTRT := buildNHCForWorkers(nhcName)
 					specTRT := nhcSpec(nhcTRT)
@@ -341,13 +341,13 @@ var _ = Describe("NHC Negative -- Validation and Webhook",
 					}
 
 					Expect(APIClient.Create(ctx, nhcTRT)).To(Succeed(),
-						"NHC creation with cluster-scoped TRT should succeed without namespace")
+						"NHC creation with cluster-scoped TestRemediationTemplate should succeed without namespace")
 
-					By("Verifying NHC with cluster-scoped TRT is Enabled")
+					By("Verifying NHC with cluster-scoped TestRemediationTemplate is Enabled")
 
 					Expect(waitForNHCPhase(ctx, nhcName, nhcparams.NHCPhaseEnabled,
 						nhcparams.NodeNotReadyTimeout)).To(Succeed(),
-						"NHC %q should be Enabled with cluster-scoped TRT (no namespace needed)", nhcName)
+						"NHC %q should be Enabled with cluster-scoped TestRemediationTemplate (no namespace needed)", nhcName)
 				})
 		})
 	})

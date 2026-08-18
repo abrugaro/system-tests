@@ -66,7 +66,7 @@ var _ = Describe("NHC Status Field Tracking",
 
 			By("Pre-cleaning stale CRs")
 
-			cleanupNHCCR(nhcparams.NHCStatusTestName)
+			cleanupNHCCR(ctx, nhcparams.NHCStatusTestName)
 		})
 
 		BeforeEach(func() {
@@ -94,9 +94,9 @@ var _ = Describe("NHC Status Field Tracking",
 
 			By("Pre-cleaning stale CRs and confirming gone")
 
-			cleanupNHCCR(nhcparams.NHCStatusTestName)
+			cleanupNHCCR(ctx, nhcparams.NHCStatusTestName)
 			waitForNHCGone(ctx, nhcparams.NHCStatusTestName)
-			cleanupSNRCR(targetWorkerName)
+			cleanupSNRCR(ctx, targetWorkerName)
 
 			GinkgoWriter.Printf("Pre-remediation boot ID: %s\n", oldBootID)
 		})
@@ -106,8 +106,8 @@ var _ = Describe("NHC Status Field Tracking",
 				logNHCControllerState()
 			}
 
-			cleanupNHCCR(nhcparams.NHCStatusTestName)
-			cleanupSNRCR(targetWorkerName)
+			cleanupNHCCR(ctx, nhcparams.NHCStatusTestName)
+			cleanupSNRCR(ctx, targetWorkerName)
 
 			if isSSHAvailable() {
 				if sshErr := startKubeletForRemediation(ctx, targetWorkerName); sshErr != nil {

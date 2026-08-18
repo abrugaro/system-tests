@@ -152,7 +152,7 @@ const (
 	// NHCTemplateWatchTestName is the NHC CR name for the template-watch test.
 	NHCTemplateWatchTestName = "nhc-test-template-watch"
 
-	// NHCCustomTemplateTestName is the NHC CR name for the custom TRT test.
+	// NHCCustomTemplateTestName is the NHC CR name for the custom TestRemediationTemplate test.
 	NHCCustomTemplateTestName = "nhc-test-custom-template"
 
 	// SNRTTestName is the SNRT CR name created for template-watch tests.

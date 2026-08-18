@@ -68,10 +68,9 @@ func buildSNRT(name string) *unstructured.Unstructured {
 }
 
 // cleanupSNRT safely deletes a SelfNodeRemediationTemplate CR by name.
-// Context propagation tracked in PR #79 (cleanupNHCCR/cleanupSNRCR).
-func cleanupSNRT(name string) {
+func cleanupSNRT(ctx context.Context, name string) {
 	helpers.DeleteRemediationCR(
-		context.TODO(), APIClient, snrtGVK, name, medik8sparams.OperatorNs,
+		ctx, APIClient, snrtGVK, name, medik8sparams.OperatorNs,
 		nhcparams.DefaultPollInterval, nhcparams.RemediationCRDeletionTimeout,
 		GinkgoWriter.Printf)
 }
@@ -494,13 +493,13 @@ func buildTestCRD(
 
 // setupTestRemediationResources creates the dummy TestRemediation CRDs,
 // template CR, and RBAC needed for multi-NHC tests.
-func setupTestRemediationResources() {
+func setupTestRemediationResources(ctx context.Context) {
 	By("Creating TestRemediationTemplate CRD")
 
 	trtCRD := buildTestCRD(nhcparams.TestRemediationTemplateCRDName,
 		"TestRemediationTemplate", "testremediationtemplates", "testremediationtemplate", "trt")
 
-	if err := APIClient.Create(context.TODO(), trtCRD); err != nil && !k8serrors.IsAlreadyExists(err) {
+	if err := APIClient.Create(ctx, trtCRD); err != nil && !k8serrors.IsAlreadyExists(err) {
 		Fail(fmt.Sprintf("Failed to create TestRemediationTemplate CRD: %v", err))
 	}
 
@@ -509,14 +508,14 @@ func setupTestRemediationResources() {
 	trCRD := buildTestCRD(nhcparams.TestRemediationCRDName,
 		"TestRemediation", "testremediations", "testremediation", "tr")
 
-	if err := APIClient.Create(context.TODO(), trCRD); err != nil && !k8serrors.IsAlreadyExists(err) {
+	if err := APIClient.Create(ctx, trCRD); err != nil && !k8serrors.IsAlreadyExists(err) {
 		Fail(fmt.Sprintf("Failed to create TestRemediation CRD: %v", err))
 	}
 
 	By("Waiting for CRDs to become Established")
 
-	waitForCRDEstablished(context.TODO(), nhcparams.TestRemediationTemplateCRDName)
-	waitForCRDEstablished(context.TODO(), nhcparams.TestRemediationCRDName)
+	waitForCRDEstablished(ctx, nhcparams.TestRemediationTemplateCRDName)
+	waitForCRDEstablished(ctx, nhcparams.TestRemediationCRDName)
 
 	By("Creating TestRemediationTemplate CR")
 
@@ -541,7 +540,7 @@ func setupTestRemediationResources() {
 		},
 	}
 
-	if err := APIClient.Create(context.TODO(), trtCR); err != nil && !k8serrors.IsAlreadyExists(err) {
+	if err := APIClient.Create(ctx, trtCR); err != nil && !k8serrors.IsAlreadyExists(err) {
 		Fail(fmt.Sprintf("Failed to create TestRemediationTemplate CR: %v", err))
 	}
 
@@ -558,7 +557,7 @@ func setupTestRemediationResources() {
 		}},
 	}
 
-	if err := APIClient.Create(context.TODO(), clusterRole); err != nil && !k8serrors.IsAlreadyExists(err) {
+	if err := APIClient.Create(ctx, clusterRole); err != nil && !k8serrors.IsAlreadyExists(err) {
 		Fail(fmt.Sprintf("Failed to create ClusterRole: %v", err))
 	}
 
@@ -578,16 +577,14 @@ func setupTestRemediationResources() {
 		},
 	}
 
-	if err := APIClient.Create(context.TODO(), clusterRoleBinding); err != nil && !k8serrors.IsAlreadyExists(err) {
+	if err := APIClient.Create(ctx, clusterRoleBinding); err != nil && !k8serrors.IsAlreadyExists(err) {
 		Fail(fmt.Sprintf("Failed to create ClusterRoleBinding: %v", err))
 	}
 }
 
 // cleanupTestRemediationResources removes all TestRemediation CRDs, CRs, and RBAC.
 // Uses retry + NotFound handling consistent with cleanupNHCCR/cleanupSNRCR.
-func cleanupTestRemediationResources() {
-	ctx := context.TODO()
-
+func cleanupTestRemediationResources(ctx context.Context) {
 	deleteWithRetry := func(obj client.Object, desc string) {
 		if waitErr := wait.PollUntilContextTimeout(
 			ctx, nhcparams.DefaultPollInterval, nhcparams.RemediationCRDeletionTimeout, true,

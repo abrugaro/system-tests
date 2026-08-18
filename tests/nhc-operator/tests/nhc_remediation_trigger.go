@@ -374,8 +374,8 @@ var _ = Describe("NHC Functional -- Remediation Trigger and CR Lifecycle",
 
 				By("Setting up TestRemediation dummy CRDs and RBAC")
 
-				setupTestRemediationResources()
-				DeferCleanup(cleanupTestRemediationResources)
+				setupTestRemediationResources(ctx)
+				DeferCleanup(func() { cleanupTestRemediationResources(ctx) })
 
 				By("Creating SNR-based NHC CR (30s unhealthy duration)")
 

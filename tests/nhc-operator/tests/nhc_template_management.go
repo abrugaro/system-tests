@@ -41,13 +41,13 @@ var _ = Describe("NHC Template Management -- Template Watch",
 
 			By("Pre-cleaning stale CRs from previous interrupted runs")
 
-			cleanupNHCCR(nhcparams.NHCTemplateWatchTestName)
-			cleanupSNRT(nhcparams.SNRTTestName)
+			cleanupNHCCR(ctx, nhcparams.NHCTemplateWatchTestName)
+			cleanupSNRT(ctx, nhcparams.SNRTTestName)
 		})
 
 		AfterEach(func() {
-			cleanupNHCCR(nhcparams.NHCTemplateWatchTestName)
-			cleanupSNRT(nhcparams.SNRTTestName)
+			cleanupNHCCR(ctx, nhcparams.NHCTemplateWatchTestName)
+			cleanupSNRT(ctx, nhcparams.SNRTTestName)
 		})
 
 		It("Verifying NHC watches template deletion and re-creation",
@@ -84,7 +84,7 @@ var _ = Describe("NHC Template Management -- Template Watch",
 
 				// cleanupSNRT uses DeleteRemediationCR which retries internally
 				// and waits for the resource to be deleted.
-				cleanupSNRT(snrtName)
+				cleanupSNRT(ctx, snrtName)
 
 				By("Verifying NHC transitions to Disabled after SNRT deletion")
 
@@ -150,7 +150,7 @@ var _ = Describe("NHC Template Management -- Custom Remediation",
 
 			By("Pre-cleaning stale CRs")
 
-			cleanupNHCCR(nhcparams.NHCCustomTemplateTestName)
+			cleanupNHCCR(ctx, nhcparams.NHCCustomTemplateTestName)
 		})
 
 		BeforeEach(func() {
@@ -178,7 +178,7 @@ var _ = Describe("NHC Template Management -- Custom Remediation",
 				logNHCControllerState()
 			}
 
-			cleanupNHCCR(nhcparams.NHCCustomTemplateTestName)
+			cleanupNHCCR(ctx, nhcparams.NHCCustomTemplateTestName)
 
 			if targetWorkerName == "" {
 				return
@@ -209,15 +209,15 @@ var _ = Describe("NHC Template Management -- Custom Remediation",
 			}
 		})
 
-		It("Verifying NHC triggers remediation with custom TRT",
+		It("Verifying NHC triggers remediation with custom TestRemediationTemplate (TRT)",
 			reportxml.ID("61976"),
 			Label(labels.TierAcceptance, labels.PlatformAny,
 				labels.ComponentRemediation), func() {
 
 				By("Setting up TestRemediation CRDs and RBAC")
 
-				setupTestRemediationResources()
-				DeferCleanup(cleanupTestRemediationResources)
+				setupTestRemediationResources(ctx)
+				DeferCleanup(func() { cleanupTestRemediationResources(ctx) })
 
 				nhcName := nhcparams.NHCCustomTemplateTestName
 
@@ -232,7 +232,7 @@ var _ = Describe("NHC Template Management -- Custom Remediation",
 
 				nhc := buildNHCWithTestRemediation(nhcName)
 				Expect(APIClient.Create(ctx, nhc)).To(Succeed(),
-					"Failed to create NHC %q with TRT", nhcName)
+					"Failed to create NHC %q with TestRemediationTemplate", nhcName)
 
 				By("Verifying pre-remediation status: phase=Enabled, healthyNodes and observedNodes match worker count")
 
