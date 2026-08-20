@@ -3,13 +3,12 @@ package tests
 import (
 	"context"
 	"fmt"
-	"strings"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	gomegatypes "github.com/onsi/gomega/types"
 
-	coordinationv1 "k8s.io/api/coordination/v1"
-	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -25,51 +24,12 @@ import (
 	"github.com/medik8s/system-tests/tests/sbr-operator/internal/sbrparams"
 )
 
-// listSchedulableWorkerNodes returns worker nodes that are Ready, schedulable, and do NOT
-// carry a control-plane or master role label. This prevents the resilience test from
-// cordoning control-plane nodes on compact clusters.
-func listSchedulableWorkerNodes() ([]corev1.Node, error) {
-	nodeList, err := APIClient.CoreV1Interface.Nodes().List(
-		context.TODO(),
-		metav1.ListOptions{LabelSelector: "node-role.kubernetes.io/worker"},
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	var eligible []corev1.Node
-
-	for i := range nodeList.Items {
-		node := &nodeList.Items[i]
-
-		if node.Spec.Unschedulable {
-			continue
-		}
-
-		if !helpers.IsNodeReady(node) {
-			continue
-		}
-
-		if _, hasMaster := node.Labels["node-role.kubernetes.io/master"]; hasMaster {
-			continue
-		}
-
-		if _, hasCP := node.Labels["node-role.kubernetes.io/control-plane"]; hasCP {
-			continue
-		}
-
-		eligible = append(eligible, *node)
-	}
-
-	return eligible, nil
-}
-
 // setNodeUnschedulable patches a node's spec.unschedulable field.
-func setNodeUnschedulable(nodeName string, unschedulable bool) error {
+func setNodeUnschedulable(ctx context.Context, nodeName string, unschedulable bool) error {
 	patch := []byte(fmt.Sprintf(`{"spec":{"unschedulable":%t}}`, unschedulable))
 
 	_, err := APIClient.CoreV1Interface.Nodes().Patch(
-		context.TODO(), nodeName, types.MergePatchType, patch, metav1.PatchOptions{})
+		ctx, nodeName, types.MergePatchType, patch, metav1.PatchOptions{})
 
 	return err
 }
@@ -77,10 +37,12 @@ func setNodeUnschedulable(nodeName string, unschedulable bool) error {
 // uncordonNodesBestEffort uncordons every node in the list, logging warnings on failure.
 // Intended for DeferCleanup/AfterAll where masking the original failure is worse than
 // leaving a node cordoned.
-func uncordonNodesBestEffort(nodeNames []string) {
+func uncordonNodesBestEffort(ctx context.Context, nodeNames []string) {
 	for _, name := range nodeNames {
-		if err := setNodeUnschedulable(name, false); err != nil {
-			GinkgoWriter.Printf("Warning: cleanup failed to uncordon node %s: %v\n", name, err)
+		if err := setNodeUnschedulable(ctx, name, false); err != nil {
+			msg := fmt.Sprintf("cleanup failed to uncordon node %s: %v", name, err)
+			GinkgoWriter.Printf("Warning: %s\n", msg)
+			AddReportEntry("uncordon-cleanup-failed", msg)
 		}
 	}
 }
@@ -92,7 +54,7 @@ func listRunningControllerPods() ([]*pod.Builder, error) {
 		APIClient, medik8sparams.OperatorNs,
 		metav1.ListOptions{LabelSelector: sbrparams.OperatorControllerPodLabelSelector})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("listing SBR controller pods in %s: %w", medik8sparams.OperatorNs, err)
 	}
 
 	return helpers.FilterRunningPods(controllerPods), nil
@@ -108,6 +70,69 @@ func uniqueNodeNames(pods []*pod.Builder) map[string]bool {
 	}
 
 	return nodes
+}
+
+// waitForPodTermination polls until the named pod in the operator namespace is gone
+// (NotFound), surfacing any non-NotFound Get error instead of masking it as "still present".
+func waitForPodTermination(ctx context.Context, podName string) {
+	GinkgoHelper()
+
+	Eventually(func() error {
+		_, getErr := APIClient.CoreV1Interface.Pods(medik8sparams.OperatorNs).Get(
+			ctx, podName, metav1.GetOptions{})
+		if k8serrors.IsNotFound(getErr) {
+			return nil
+		}
+
+		if getErr != nil {
+			return fmt.Errorf("getting pod %s: %w", podName, getErr)
+		}
+
+		return fmt.Errorf("pod %s still exists", podName)
+	}, medik8sparams.DefaultTimeout, sbrparams.DefaultPollInterval).Should(Succeed(),
+		"Pod %s did not terminate", podName)
+}
+
+// pullControllerDeployment pulls the SBR controller-manager deployment using the fixed
+// operator deployment name and namespace. The error is returned (never collapsed to zero) so
+// pollers surface transient API faults instead of masking them as "not ready".
+func pullControllerDeployment() (*deployment.Builder, error) {
+	dep, err := deployment.Pull(APIClient, sbrparams.OperatorDeploymentName, medik8sparams.OperatorNs)
+	if err != nil {
+		return nil, fmt.Errorf("pulling SBR controller deployment %s/%s: %w",
+			medik8sparams.OperatorNs, sbrparams.OperatorDeploymentName, err)
+	}
+
+	return dep, nil
+}
+
+// controllerReadyReplicas returns the SBR controller deployment's ReadyReplicas count,
+// propagating any Pull error rather than reporting zero.
+func controllerReadyReplicas() (int32, error) {
+	dep, err := pullControllerDeployment()
+	if err != nil {
+		return 0, err
+	}
+
+	return dep.Object.Status.ReadyReplicas, nil
+}
+
+// waitForControllerReadyReplicas polls the controller deployment's ReadyReplicas until the
+// count satisfies matcher or timeout elapses. A transient Pull error fails the poll iteration
+// (surfacing on timeout) instead of being masked as zero replicas.
+func waitForControllerReadyReplicas(
+	timeout time.Duration,
+	matcher gomegatypes.GomegaMatcher,
+	messageArgs ...interface{},
+) {
+	GinkgoHelper()
+
+	Eventually(func(g Gomega) int32 {
+		replicas, err := controllerReadyReplicas()
+		g.Expect(err).ToNot(HaveOccurred())
+
+		return replicas
+	}, timeout, sbrparams.DefaultPollInterval).Should(matcher, messageArgs...)
 }
 
 var _ = Describe(
@@ -135,9 +160,11 @@ var _ = Describe(
 				labels.PlatformAny,
 				labels.ComponentController,
 			), func() {
+				ctx := context.Background()
+
 				By("Listing schedulable worker-only nodes")
 
-				workerNodes, err := listSchedulableWorkerNodes()
+				workerNodes, err := helpers.ListSchedulableWorkerNodes(ctx, APIClient)
 				Expect(err).ToNot(HaveOccurred(), "Failed to list worker nodes")
 
 				if len(workerNodes) < sbrparams.MinWorkerNodesForResilienceTest {
@@ -182,9 +209,11 @@ var _ = Describe(
 					}
 				}
 
-				Expect(keeperNode).ToNot(BeEmpty(),
-					"No controller pod runs on an eligible worker node (controller nodes: %v, workers: %v)",
-					controllerNodeNames, workerNodeNames)
+				if keeperNode == "" {
+					Skip(fmt.Sprintf(
+						"No controller pod runs on an eligible worker node (controller nodes: %v, workers: %v)",
+						controllerNodeNames, workerNodeNames))
+				}
 
 				GinkgoWriter.Printf("Keeper node: %s\n", keeperNode)
 
@@ -201,19 +230,12 @@ var _ = Describe(
 				DeferCleanup(func() {
 					By("DeferCleanup: uncordoning all nodes modified by the test")
 
-					uncordonNodesBestEffort(cordonedNodes)
+					uncordonNodesBestEffort(ctx, cordonedNodes)
 
 					By("DeferCleanup: waiting for controller to return to expected replicas")
 
-					Eventually(func() int32 {
-						dep, pullErr := deployment.Pull(
-							APIClient, sbrparams.OperatorDeploymentName, medik8sparams.OperatorNs)
-						if pullErr != nil {
-							return 0
-						}
-
-						return dep.Object.Status.ReadyReplicas
-					}, sbrparams.ControllerScaleBackTimeout, sbrparams.DefaultPollInterval).Should(
+					waitForControllerReadyReplicas(
+						sbrparams.ControllerScaleBackTimeout,
 						Equal(sbrparams.ExpectedReplicas),
 						"Controller deployment did not recover to %d ready replicas during cleanup",
 						sbrparams.ExpectedReplicas)
@@ -223,7 +245,7 @@ var _ = Describe(
 					len(nodesToCordon), keeperNode))
 
 				for _, nodeName := range nodesToCordon {
-					Expect(setNodeUnschedulable(nodeName, true)).To(Succeed(),
+					Expect(setNodeUnschedulable(ctx, nodeName, true)).To(Succeed(),
 						"Failed to cordon node %s", nodeName)
 					cordonedNodes = append(cordonedNodes, nodeName)
 				}
@@ -231,12 +253,10 @@ var _ = Describe(
 				By("Verifying cordoned nodes report Unschedulable before proceeding")
 
 				for _, nodeName := range cordonedNodes {
-					Eventually(func() bool {
+					Eventually(func(g Gomega) bool {
 						node, getErr := APIClient.CoreV1Interface.Nodes().Get(
-							context.TODO(), nodeName, metav1.GetOptions{})
-						if getErr != nil {
-							return false
-						}
+							ctx, nodeName, metav1.GetOptions{})
+						g.Expect(getErr).ToNot(HaveOccurred())
 
 						return node.Spec.Unschedulable
 					}, medik8sparams.DefaultTimeout, sbrparams.DefaultPollInterval).Should(BeTrue(),
@@ -257,7 +277,7 @@ var _ = Describe(
 						podName, podNode)
 
 					delErr := APIClient.CoreV1Interface.Pods(medik8sparams.OperatorNs).Delete(
-						context.TODO(), podName, metav1.DeleteOptions{})
+						ctx, podName, metav1.DeleteOptions{})
 					Expect(delErr).ToNot(HaveOccurred(),
 						"Failed to delete controller pod %s", podName)
 				}
@@ -269,13 +289,7 @@ var _ = Describe(
 						continue
 					}
 
-					Eventually(func() bool {
-						_, getErr := APIClient.CoreV1Interface.Pods(medik8sparams.OperatorNs).Get(
-							context.TODO(), controllerPod.Object.Name, metav1.GetOptions{})
-
-						return k8serrors.IsNotFound(getErr)
-					}, medik8sparams.DefaultTimeout, sbrparams.DefaultPollInterval).Should(BeTrue(),
-						"Deleted pod %s did not terminate", controllerPod.Object.Name)
+					waitForPodTermination(ctx, controllerPod.Object.Name)
 				}
 
 				By("Verifying at least one controller pod is Running on the keeper node")
@@ -283,8 +297,8 @@ var _ = Describe(
 				Eventually(func(assertion Gomega) {
 					pods, listErr := listRunningControllerPods()
 					assertion.Expect(listErr).ToNot(HaveOccurred())
-					assertion.Expect(len(pods)).To(BeNumerically(">=", 1),
-						"expected at least 1 running controller pod")
+					assertion.Expect(len(pods)).To(BeNumerically(">=", sbrparams.MinReplicasWhenDegraded),
+						"expected at least %d running controller pod(s)", sbrparams.MinReplicasWhenDegraded)
 
 					hasKeeperPod := false
 
@@ -303,40 +317,34 @@ var _ = Describe(
 
 				By("Verifying deployment reports at least 1 ready replica")
 
-				Eventually(func() int32 {
-					dep, pullErr := deployment.Pull(
-						APIClient, sbrparams.OperatorDeploymentName, medik8sparams.OperatorNs)
-					if pullErr != nil {
-						return 0
-					}
-
-					return dep.Object.Status.ReadyReplicas
-				}, sbrparams.ControllerRescheduleTimeout, sbrparams.DefaultPollInterval).Should(
-					BeNumerically(">=", int32(1)),
-					"Deployment did not report at least 1 ready replica while degraded")
+				waitForControllerReadyReplicas(
+					sbrparams.ControllerRescheduleTimeout,
+					BeNumerically(">=", sbrparams.MinReplicasWhenDegraded),
+					"Deployment did not report at least %d ready replica(s) while degraded",
+					sbrparams.MinReplicasWhenDegraded)
 
 				By("Consistently verifying controller stays available during degraded phase")
 
 				Consistently(func(assertion Gomega) {
-					dep, pullErr := deployment.Pull(
-						APIClient, sbrparams.OperatorDeploymentName, medik8sparams.OperatorNs)
+					dep, pullErr := pullControllerDeployment()
 					assertion.Expect(pullErr).ToNot(HaveOccurred())
-					assertion.Expect(dep.Object.Status.AvailableReplicas).To(BeNumerically(">=", int32(1)),
-						"Controller deployment must maintain at least 1 available replica")
+					assertion.Expect(dep.Object.Status.AvailableReplicas).To(
+						BeNumerically(">=", sbrparams.MinReplicasWhenDegraded),
+						"Controller deployment must maintain at least %d available replica(s)",
+						sbrparams.MinReplicasWhenDegraded)
 				}, sbrparams.ControllerDegradedConsistentDuration, sbrparams.DefaultPollInterval).Should(Succeed(),
 					"Controller availability was not sustained during the single-worker degraded phase")
 
 				By("Uncordoning all worker nodes")
 
-				uncordonNodesBestEffort(cordonedNodes)
+				uncordonNodesBestEffort(ctx, cordonedNodes)
 
 				By("Verifying controller scales back to expected replicas on different nodes")
 
 				Eventually(func(assertion Gomega) {
-					dep, pullErr := deployment.Pull(
-						APIClient, sbrparams.OperatorDeploymentName, medik8sparams.OperatorNs)
+					readyReplicas, pullErr := controllerReadyReplicas()
 					assertion.Expect(pullErr).ToNot(HaveOccurred())
-					assertion.Expect(dep.Object.Status.ReadyReplicas).To(Equal(sbrparams.ExpectedReplicas),
+					assertion.Expect(readyReplicas).To(Equal(sbrparams.ExpectedReplicas),
 						"expected %d ready replicas after uncordoning", sbrparams.ExpectedReplicas)
 
 					pods, listErr := listRunningControllerPods()
@@ -362,7 +370,7 @@ var _ = Describe(
 
 				By("Verifying cluster has enough workers for leadership handover")
 
-				workerNodes, err := listSchedulableWorkerNodes()
+				workerNodes, err := helpers.ListSchedulableWorkerNodes(ctx, APIClient)
 				Expect(err).ToNot(HaveOccurred(), "Failed to list worker nodes")
 
 				if len(workerNodes) < sbrparams.MinWorkerNodesForHandoverTest {
@@ -373,67 +381,40 @@ var _ = Describe(
 
 				By("Verifying SBR controller deployment starts healthy")
 
-				Eventually(func(assertion Gomega) {
-					dep, pullErr := deployment.Pull(
-						APIClient, sbrparams.OperatorDeploymentName, medik8sparams.OperatorNs)
-					assertion.Expect(pullErr).ToNot(HaveOccurred())
-					assertion.Expect(dep.Object.Status.ReadyReplicas).To(Equal(sbrparams.ExpectedReplicas),
-						"expected %d ready replicas before handover test", sbrparams.ExpectedReplicas)
-				}, medik8sparams.DefaultTimeout, sbrparams.DefaultPollInterval).Should(Succeed())
+				waitForControllerReadyReplicas(
+					medik8sparams.DefaultTimeout,
+					Equal(sbrparams.ExpectedReplicas),
+					"expected %d ready replicas before handover test",
+					sbrparams.ExpectedReplicas)
 
 				By("Reading the leader election lease to identify the current leader")
 
-				lease := &coordinationv1.Lease{}
-				Expect(APIClient.Get(ctx, types.NamespacedName{
-					Name:      sbrparams.ControllerLeaseName,
-					Namespace: medik8sparams.OperatorNs,
-				}, lease)).To(Succeed(), "Failed to get SBR leader election lease")
-
-				Expect(lease.Spec.HolderIdentity).ToNot(BeNil(),
-					"Leader election lease has no holder")
-
-				oldLeaderIdentity := *lease.Spec.HolderIdentity
+				oldLeaderPodName, oldLeaderIdentity, err := helpers.GetLeaderPodName(
+					ctx, APIClient, sbrparams.ControllerLeaseName, medik8sparams.OperatorNs)
+				Expect(err).ToNot(HaveOccurred(), "Failed to identify SBR controller leader")
 
 				GinkgoWriter.Printf("Current leader identity: %s\n", oldLeaderIdentity)
 
 				By("Finding the leader controller pod")
 
-				oldLeaderPodName, _, hasSuffix := strings.Cut(oldLeaderIdentity, "_")
-				if !hasSuffix || oldLeaderPodName == "" {
-					Fail(fmt.Sprintf(
-						"unexpected leader holderIdentity format %q; expected <podname>_<uuid>",
-						oldLeaderIdentity))
-				}
-
-				controllerPods, err := pod.List(APIClient, medik8sparams.OperatorNs,
-					metav1.ListOptions{LabelSelector: sbrparams.OperatorControllerPodLabelSelector})
-				Expect(err).ToNot(HaveOccurred(), "Failed to list controller pods")
-
-				var leaderPod *pod.Builder
-
-				for _, controllerPod := range controllerPods {
-					if controllerPod.Object.Name == oldLeaderPodName {
-						leaderPod = controllerPod
-
-						break
-					}
-				}
-
-				Expect(leaderPod).ToNot(BeNil(),
-					"Could not find controller pod matching leader pod name %q (from identity %q)",
-					oldLeaderPodName, oldLeaderIdentity)
+				leaderPod, err := pod.Pull(APIClient, oldLeaderPodName, medik8sparams.OperatorNs)
+				Expect(err).ToNot(HaveOccurred(),
+					"Could not pull leader pod %q (from identity %q)", oldLeaderPodName, oldLeaderIdentity)
 
 				By("Deleting the leader controller pod " + leaderPod.Object.Name)
 
 				delErr := APIClient.CoreV1Interface.Pods(medik8sparams.OperatorNs).Delete(
-					context.TODO(), leaderPod.Object.Name, metav1.DeleteOptions{})
+					ctx, leaderPod.Object.Name, metav1.DeleteOptions{})
 				Expect(delErr).ToNot(HaveOccurred(),
 					"Failed to delete leader pod %s", leaderPod.Object.Name)
 
+				By("Waiting for the deleted leader pod to terminate")
+
+				waitForPodTermination(ctx, leaderPod.Object.Name)
+
 				By("Waiting for SBR controller deployment to return to full ready replicas")
 
-				sbrDeployment, err := deployment.Pull(
-					APIClient, sbrparams.OperatorDeploymentName, medik8sparams.OperatorNs)
+				sbrDeployment, err := pullControllerDeployment()
 				Expect(err).ToNot(HaveOccurred())
 				Expect(sbrDeployment.IsReady(sbrparams.ControllerHandoverTimeout)).To(BeTrue(),
 					"SBR deployment did not become ready after leader pod deletion")
@@ -441,19 +422,11 @@ var _ = Describe(
 				By("Verifying controller lease transferred to a different pod")
 
 				Eventually(func(assertion Gomega) {
-					updatedLease := &coordinationv1.Lease{}
-					assertion.Expect(APIClient.Get(ctx, types.NamespacedName{
-						Name:      sbrparams.ControllerLeaseName,
-						Namespace: medik8sparams.OperatorNs,
-					}, updatedLease)).To(Succeed())
-
-					assertion.Expect(updatedLease.Spec.HolderIdentity).ToNot(BeNil(),
-						"Lease has no holder after pod deletion")
-					assertion.Expect(*updatedLease.Spec.HolderIdentity).ToNot(Equal(oldLeaderIdentity),
+					newLeaderPodName, newLeaderIdentity, leaderErr := helpers.GetLeaderPodName(
+						ctx, APIClient, sbrparams.ControllerLeaseName, medik8sparams.OperatorNs)
+					assertion.Expect(leaderErr).ToNot(HaveOccurred())
+					assertion.Expect(newLeaderIdentity).ToNot(Equal(oldLeaderIdentity),
 						"Lease is still held by deleted pod %s", oldLeaderIdentity)
-
-					newLeaderIdentity := *updatedLease.Spec.HolderIdentity
-					newLeaderPodName, _, _ := strings.Cut(newLeaderIdentity, "_")
 
 					pods, listErr := listRunningControllerPods()
 					assertion.Expect(listErr).ToNot(HaveOccurred())
@@ -476,15 +449,8 @@ var _ = Describe(
 
 				By("Verifying deployment has full ready replicas after handover")
 
-				Eventually(func() int32 {
-					dep, pullErr := deployment.Pull(
-						APIClient, sbrparams.OperatorDeploymentName, medik8sparams.OperatorNs)
-					if pullErr != nil {
-						return 0
-					}
-
-					return dep.Object.Status.ReadyReplicas
-				}, sbrparams.ControllerHandoverTimeout, sbrparams.DefaultPollInterval).Should(
+				waitForControllerReadyReplicas(
+					sbrparams.ControllerHandoverTimeout,
 					Equal(sbrparams.ExpectedReplicas),
 					"Deployment did not return to %d ready replicas after leadership handover",
 					sbrparams.ExpectedReplicas)

@@ -23,6 +23,10 @@ const (
 	// ExpectedReplicas defines the expected number of replicas for SBR controller manager.
 	ExpectedReplicas = int32(2)
 
+	// MinReplicasWhenDegraded is the minimum number of controller pods/replicas that must remain
+	// available during the single-worker degraded phase (only the keeper node is schedulable).
+	MinReplicasWhenDegraded = int32(1)
+
 	// ManagerContainerName is the name of the main controller container in the SBR pod.
 	ManagerContainerName = "manager"
 

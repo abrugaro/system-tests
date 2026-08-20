@@ -176,7 +176,7 @@ transfers to a different controller pod. Follows the same pattern as the FAR con
 lifecycle test (OCP-70636).
 
 - **Operators**: SBR v0.3.0
-- **Cluster**: Any topology with at least 2 worker nodes
+- **Cluster**: Any topology with at least 2 schedulable worker-only (non-control-plane) nodes
 - **Storage**: None
 - **Environment**: Connected or disconnected
 - **Standalone**: `ginkgo --label-filter="sbr" --focus="controller leadership" ./tests/sbr-operator/...`
