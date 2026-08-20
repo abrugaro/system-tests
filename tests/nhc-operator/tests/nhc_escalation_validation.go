@@ -31,6 +31,7 @@ var _ = Describe("NHC Escalation -- Validation and Webhook",
 			nhcparams.NHCEscalationValidationPrefix + "-timeout",
 			nhcparams.NHCEscalationValidationPrefix + "-short-timeout",
 			nhcparams.NHCEscalationValidationPrefix + "-dup-kind",
+			nhcparams.NHCEscalationValidationPrefix + "-big-order",
 		}
 
 		BeforeAll(func() {
@@ -65,8 +66,8 @@ var _ = Describe("NHC Escalation -- Validation and Webhook",
 			}
 		})
 
-		Context("escalation webhook rejection", func() {
-			It("Verifying escalation order field is required",
+		Context("escalation webhook validation", func() {
+			It("Verifying escalation order field validation",
 				reportxml.ID("60863"),
 				Label(labels.TierAcceptance, labels.PlatformAny,
 					labels.ComponentWebhook), func() {
@@ -101,6 +102,24 @@ var _ = Describe("NHC Escalation -- Validation and Webhook",
 						"Error should mention duplicate order")
 
 					verifyNHCNotCreated(ctx, nhcName)
+
+					By("Creating NHC with escalation order values exceeding int32 max (accepted)")
+
+					nhcName = nhcparams.NHCEscalationValidationPrefix + "-big-order"
+
+					step1 = testRemediationStepRaw(9999999998, "60s")
+					step2 = validEscalationStepRaw(9999999999, "180s")
+
+					nhc = buildNHCWithEscalationRaw(nhcName, []map[string]interface{}{step1, step2})
+
+					err = APIClient.Create(ctx, nhc)
+					Expect(err).ToNot(HaveOccurred(),
+						"NHC creation should succeed with very large order values")
+
+					created := &unstructured.Unstructured{}
+					created.SetGroupVersionKind(nhcGVK)
+					Expect(APIClient.Get(ctx, client.ObjectKey{Name: nhcName}, created)).To(Succeed(),
+						"NHC CR %q should be persisted after creation with large order values", nhcName)
 				})
 
 			It("Verifying escalation timeout field is required and has minimum value",

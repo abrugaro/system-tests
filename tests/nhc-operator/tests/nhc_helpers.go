@@ -720,20 +720,20 @@ func buildNHCWithEscalation(name string, steps []escalationStep) *unstructured.U
 	delete(spec, "remediationTemplate")
 
 	escalations := make([]interface{}, len(steps))
-	for i, s := range steps {
+	for stepIndex, step := range steps {
 		tmpl := map[string]interface{}{
-			"apiVersion": s.templateAPIVersion,
-			"kind":       s.templateKind,
-			"name":       s.templateName,
+			"apiVersion": step.templateAPIVersion,
+			"kind":       step.templateKind,
+			"name":       step.templateName,
 		}
-		if s.templateNamespace != "" {
-			tmpl["namespace"] = s.templateNamespace
+		if step.templateNamespace != "" {
+			tmpl["namespace"] = step.templateNamespace
 		}
 
-		escalations[i] = map[string]interface{}{
+		escalations[stepIndex] = map[string]interface{}{
 			"remediationTemplate": tmpl,
-			"order":               int64(s.order),
-			"timeout":             s.timeout,
+			"order":               int64(step.order),
+			"timeout":             step.timeout,
 		}
 	}
 

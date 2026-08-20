@@ -331,17 +331,20 @@ SNR reboots the node for automatic recovery.
 - **Standalone**: `ginkgo --label-filter="nhc && disruption:destructive" --focus="non-remediating NHC" ./tests/nhc-operator/...`
 - **Pass criteria**: Second NHC phase is not Remediating, Delete() succeeds (asserted), first NHC returns to Enabled after SNR remediation, node recovers
 
-### 17. Escalation Order Field Required ([OCP-60863](https://polarion.engineering.redhat.com/polarion/#/project/OSE/workitem?id=OCP-60863))
+### 17. Escalation Order Field Validation ([OCP-60863](https://polarion.engineering.redhat.com/polarion/#/project/OSE/workitem?id=OCP-60863))
 
-Attempts to create NHC CRs with escalatingRemediations that have a missing
-order field and duplicate order values. Verifies the webhook rejects both
-and the CRs are not persisted.
+Exercises webhook validation of the `order` field in escalatingRemediations.
+Rejection cases: creating NHC CRs with a missing order field and with
+duplicate order values -- verifies the webhook rejects both and the CRs are
+not persisted. Acceptance case: creating an NHC CR with very large order
+values (9999999998 / 9999999999) -- verifies the webhook accepts it and the
+CR is created.
 
 - **Operators**: NHC v0.12.0+
 - **Cluster**: Any (no node disruption)
 - **Environment**: Connected or disconnected
-- **Standalone**: `ginkgo --label-filter="nhc && disruption:nondestructive" --focus="order field is required" ./tests/nhc-operator/...`
-- **Pass criteria**: API returns error containing "order" for missing order, "duplicate order" for duplicate values, CR not created in either case
+- **Standalone**: `ginkgo --label-filter="nhc && disruption:nondestructive" --focus="order field validation" ./tests/nhc-operator/...`
+- **Pass criteria**: API returns error containing "order" for missing order and "duplicate order" for duplicate values, with the CR not created in either rejection case; NHC creation with very large order values succeeds and the CR is persisted
 
 ### 18. Escalation Timeout Field Required and Minimum Value ([OCP-60862](https://polarion.engineering.redhat.com/polarion/#/project/OSE/workitem?id=OCP-60862))
 
