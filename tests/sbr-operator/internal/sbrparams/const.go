@@ -251,6 +251,37 @@ const (
 	// AgentMetricsPort is the port on which SBR agent pods expose custom Prometheus metrics.
 	// Port 8080 is controller-runtime's built-in metrics; port 8082 is the SBR agent's own metrics.
 	AgentMetricsPort = "8082"
+
+	// PVCleanupSCName is the StorageClass created by the medik8s-sbr-nfs-bastion CI step.
+	// It uses kubernetes.io/no-provisioner which SBR treats as an unknown provisioner,
+	// triggering the testRWXSupport code path.
+	PVCleanupSCName = "nfs-sbr"
+
+	// PVCleanupReferencePVName is a CI PV read (never modified) to discover the NFS server and path.
+	PVCleanupReferencePVName = "nfs-sbr-pv"
+
+	// PVCleanupTestMainPVName is the PV created by the test for the SBRC shared-storage PVC.
+	PVCleanupTestMainPVName = "test-pv-cleanup-main"
+
+	// PVCleanupTestDecoyPVName is the PV created by the test to attract the testRWXSupport PVC.
+	PVCleanupTestDecoyPVName = "test-pv-cleanup-decoy"
+
+	// PVCleanupSBRCName is the SBRC name used in the PV cleanup tests.
+	PVCleanupSBRCName = "test-sbrc-pv-cleanup"
+
+	// PVCleanupStalePVCSC is the storageClassName assigned to the stale PVC so it does not
+	// bind to any real PV. Must not match any existing SC in the cluster.
+	PVCleanupStalePVCSC = "nonexistent-sc-for-stale-test"
+
+	// PVCleanupReconcileTimeout is how long to wait for the SBRC to reconcile after creation.
+	// testRWXSupport includes a 5s sleep, plus PVC binding and DaemonSet rollout.
+	PVCleanupReconcileTimeout = 5 * time.Minute
+
+	// PVCleanupDeletionTimeout is how long to wait for SBRC deletion (finalizer drain + PV patch).
+	PVCleanupDeletionTimeout = 3 * time.Minute
+
+	// PVCleanupPVSettleTimeout is how long to wait after SBRC operations to verify PV state.
+	PVCleanupPVSettleTimeout = 30 * time.Second
 )
 
 // AgentExpectedMetricNames lists the Prometheus metric names that must be present in the agent output.
