@@ -372,7 +372,21 @@ the duplicate for remediators that do not support this feature.
 - **Standalone**: `ginkgo --label-filter="nhc && disruption:nondestructive" --focus="duplicate remediator kind" ./tests/nhc-operator/...`
 - **Pass criteria**: API returns error containing "same kind", CR not created
 
-### 20. Escalation Order Change Rejected During Active Remediation ([OCP-60865](https://polarion.engineering.redhat.com/polarion/#/project/OSE/workitem?id=OCP-60865))
+### 20. Multiple Same-Kind Templates Accepted ([OCP-74932](https://polarion.engineering.redhat.com/polarion/#/project/OSE/workitem?id=OCP-74932))
+
+Companion to the negative case above: creates two `TestRemediationTemplate` CRs
+of the same Kind that both carry the `multiple-templates-support` annotation, then
+creates an NHC CR with escalating remediations referencing both. Verifies the
+webhook accepts multiple templates of the same Kind when every template of that
+Kind supports the feature.
+
+- **Operators**: NHC v0.12.0+
+- **Cluster**: Any (no node disruption)
+- **Environment**: Connected or disconnected
+- **Standalone**: `ginkgo --label-filter="nhc && disruption:nondestructive" --focus="accepted when templates support multiple" ./tests/nhc-operator/...`
+- **Pass criteria**: NHC CR is created and persisted
+
+### 21. Escalation Order Change Rejected During Active Remediation ([OCP-60865](https://polarion.engineering.redhat.com/polarion/#/project/OSE/workitem?id=OCP-60865))
 
 Creates an NHC with escalating remediations (TestRemediation then SNR),
 stops kubelet on a worker to trigger remediation, waits for the

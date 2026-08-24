@@ -32,6 +32,7 @@ var _ = Describe("NHC Escalation -- Validation and Webhook",
 			nhcparams.NHCEscalationValidationPrefix + "-short-timeout",
 			nhcparams.NHCEscalationValidationPrefix + "-dup-kind",
 			nhcparams.NHCEscalationValidationPrefix + "-big-order",
+			nhcparams.NHCEscalationValidationPrefix + "-multi-tmpl",
 		}
 
 		BeforeAll(func() {
@@ -75,7 +76,7 @@ var _ = Describe("NHC Escalation -- Validation and Webhook",
 
 					nhcName := nhcparams.NHCEscalationValidationPrefix + "-order"
 
-					step := validEscalationStepRaw(0, "60s")
+					step := validEscalationStepRaw(0, nhcparams.EscalationFirstStepTimeout)
 					delete(step, "order") // intentionally omit required field
 
 					nhc := buildNHCWithEscalationRaw(nhcName, []map[string]interface{}{step})
@@ -91,7 +92,7 @@ var _ = Describe("NHC Escalation -- Validation and Webhook",
 
 					nhcName = nhcparams.NHCEscalationValidationPrefix + "-dup-order"
 
-					step1 := validEscalationStepRaw(0, "60s")
+					step1 := validEscalationStepRaw(0, nhcparams.EscalationFirstStepTimeout)
 					step2 := testRemediationStepRaw(0, "120s") // same order=0 as step1
 
 					nhc = buildNHCWithEscalationRaw(nhcName, []map[string]interface{}{step1, step2})
@@ -107,7 +108,7 @@ var _ = Describe("NHC Escalation -- Validation and Webhook",
 
 					nhcName = nhcparams.NHCEscalationValidationPrefix + "-big-order"
 
-					step1 = testRemediationStepRaw(9999999998, "60s")
+					step1 = testRemediationStepRaw(9999999998, nhcparams.EscalationFirstStepTimeout)
 					step2 = validEscalationStepRaw(9999999999, "180s")
 
 					nhc = buildNHCWithEscalationRaw(nhcName, []map[string]interface{}{step1, step2})
@@ -130,7 +131,7 @@ var _ = Describe("NHC Escalation -- Validation and Webhook",
 
 					nhcName := nhcparams.NHCEscalationValidationPrefix + "-timeout"
 
-					step := validEscalationStepRaw(0, "60s")
+					step := validEscalationStepRaw(0, nhcparams.EscalationFirstStepTimeout)
 					delete(step, "timeout") // intentionally omit required field
 
 					nhc := buildNHCWithEscalationRaw(nhcName, []map[string]interface{}{step})
@@ -166,7 +167,7 @@ var _ = Describe("NHC Escalation -- Validation and Webhook",
 
 					By("Attempting to create NHC with two TestRemediation templates (same Kind)")
 
-					step1 := testRemediationStepRaw(0, "60s")
+					step1 := testRemediationStepRaw(0, nhcparams.EscalationFirstStepTimeout)
 					step2 := testRemediationStepRaw(1, "120s") // same Kind as step1
 
 					nhc := buildNHCWithEscalationRaw(nhcName, []map[string]interface{}{step1, step2})
@@ -178,6 +179,35 @@ var _ = Describe("NHC Escalation -- Validation and Webhook",
 						"Error should mention duplicate template kind")
 
 					verifyNHCNotCreated(ctx, nhcName)
+				})
+
+			It("Verifying duplicate remediator kind is accepted when templates support multiple",
+				reportxml.ID("74932"),
+				Label(labels.TierAcceptance, labels.PlatformAny,
+					labels.ComponentWebhook), func() {
+					nhcName := nhcparams.NHCEscalationValidationPrefix + "-multi-tmpl"
+
+					By("Creating two same-Kind TestRemediationTemplates that support multiple templates")
+
+					tmpl1, tmpl2 := setupMultipleTemplateSupport(ctx)
+
+					DeferCleanup(func() { cleanupMultipleTemplateSupport(ctx) })
+
+					By("Creating NHC with two same-Kind templates carrying the multiple-templates annotation")
+
+					step1 := multiTemplateStepRaw(tmpl1, 0, nhcparams.EscalationFirstStepTimeout)
+					step2 := multiTemplateStepRaw(tmpl2, 1, "120s") // same Kind as step1, annotation supported
+
+					nhc := buildNHCWithEscalationRaw(nhcName, []map[string]interface{}{step1, step2})
+
+					err := APIClient.Create(ctx, nhc)
+					Expect(err).ToNot(HaveOccurred(),
+						"NHC creation should succeed when duplicate-kind templates support multiple templates")
+
+					created := &unstructured.Unstructured{}
+					created.SetGroupVersionKind(nhcGVK)
+					Expect(APIClient.Get(ctx, client.ObjectKey{Name: nhcName}, created)).To(Succeed(),
+						"NHC CR %q should be persisted after creation", nhcName)
 				})
 		})
 	})
@@ -226,7 +256,7 @@ var _ = Describe("NHC Escalation -- Edit During Remediation",
 				By("Setting up TestRemediation CRDs and RBAC")
 
 				setupTestRemediationResources(ctx)
-				DeferCleanup(cleanupTestRemediationResources)
+				DeferCleanup(func() { cleanupTestRemediationResources(ctx) })
 
 				By("Creating NHC with escalation: TestRemediation (order=0, timeout=600s) then SNR (order=1)")
 
@@ -293,8 +323,8 @@ var _ = Describe("NHC Escalation -- Edit During Remediation",
 				spec := nhcSpec(current)
 				escalations, ok := spec["escalatingRemediations"].([]interface{})
 				Expect(ok).To(BeTrue(), "NHC spec should have escalatingRemediations slice")
-				Expect(len(escalations)).To(BeNumerically(">=", 2),
-					"Need at least 2 escalation steps to swap order")
+				Expect(escalations).To(HaveLen(2),
+					"NHC should have exactly the 2 escalation steps it was created with")
 
 				step0, ok0 := escalations[0].(map[string]interface{})
 				Expect(ok0).To(BeTrue(), "escalation step 0 should be a map")
@@ -309,7 +339,9 @@ var _ = Describe("NHC Escalation -- Edit During Remediation",
 				Expect(updateErr).To(HaveOccurred(),
 					"Updating escalation order should be rejected during active remediation")
 				Expect(updateErr.Error()).To(ContainSubstring(nhcparams.EscalationWebhookUpdateProhibited),
-					"Error should mention escalating remediations update is prohibited")
+					"Error should mention the escalating remediations field")
+				Expect(updateErr.Error()).To(ContainSubstring(nhcparams.EscalationWebhookOngoingRemediation),
+					"Error should mention the update is prohibited due to running remediation")
 
 				By(fmt.Sprintf("Attempting kubelet re-enable (best-effort) and waiting for node recovery on %s",
 					targetNode.Name))
@@ -318,11 +350,11 @@ var _ = Describe("NHC Escalation -- Edit During Remediation",
 				// auto-reboots the node after ~60-90s. SSH may fail mid-reboot, but the
 				// reboot restores kubelet automatically, so treat SSH failure as non-fatal.
 				// WaitForNodeReady below is the real recovery gate.
-				if err := startKubeletForRemediation(ctx, targetNode.Name); err != nil {
+				if sshErr := startKubeletForRemediation(ctx, targetNode.Name); sshErr != nil {
 					GinkgoWriter.Printf(
 						"kubelet restart via SSH failed (node may be rebooting via AWS watchdog): %v\n",
-						err)
-					AddReportEntry("ssh-kubelet-restart-failed", err.Error())
+						sshErr)
+					AddReportEntry("ssh-kubelet-restart-failed", sshErr.Error())
 				}
 
 				Expect(helpers.WaitForNodeReady(ctx, APIClient, targetNode.Name,

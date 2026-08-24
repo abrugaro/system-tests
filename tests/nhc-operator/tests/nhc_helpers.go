@@ -456,6 +456,16 @@ var testRemediationGVK = schema.GroupVersionKind{
 	Kind:    "TestRemediation",
 }
 
+// multiTemplateGVK is the GVK for the dedicated MultiTemplateRemediationTemplate CRs used by the
+// multiple-templates-support acceptance test (OCP-74932). Using a dedicated Kind (not the shared
+// TestRemediationTemplate) keeps the webhook's cluster-wide template List scoped to this test's
+// two annotated CRs, immune to other specs' TestRemediationTemplate CRs.
+var multiTemplateGVK = schema.GroupVersionKind{
+	Group:   nhcparams.TestRemediationGroup,
+	Version: nhcparams.TestRemediationVersion,
+	Kind:    nhcparams.MultiTemplateKind,
+}
+
 // buildTestCRD creates a cluster-scoped CRD with spec/status preserve-unknown schema.
 func buildTestCRD(
 	name, kind, plural, singular, shortName string,
@@ -647,10 +657,10 @@ func buildNHCWithTestRemediation(name string) *unstructured.Unstructured {
 
 	spec["unhealthyConditions"] = []interface{}{
 		map[string]interface{}{
-			"type": "Ready", "status": "False", "duration": "10s",
+			"type": "Ready", "status": "False", "duration": nhcparams.TestRemediationUnhealthyDuration,
 		},
 		map[string]interface{}{
-			"type": "Ready", "status": "Unknown", "duration": "10s",
+			"type": "Ready", "status": "Unknown", "duration": nhcparams.TestRemediationUnhealthyDuration,
 		},
 	}
 
@@ -663,7 +673,7 @@ type escalationStep struct {
 	templateKind       string
 	templateName       string
 	templateNamespace  string
-	order              int
+	order              int64
 	timeout            string
 }
 
@@ -677,7 +687,7 @@ type remediatorConfig struct {
 
 var snrRemediator = remediatorConfig{
 	apiVersion: nhcparams.SNRCRDGroup + "/" + nhcparams.SNRCRDVersion,
-	kind:       "SelfNodeRemediationTemplate",
+	kind:       nhcparams.SNRTemplateKind,
 	name:       nhcparams.SNRTemplateName,
 	namespace:  medik8sparams.OperatorNs,
 }
@@ -689,7 +699,7 @@ var testRemediator = remediatorConfig{
 }
 
 // newEscalationStep returns a typed escalation step for the given remediator.
-func newEscalationStep(remediator remediatorConfig, order int, timeout string) escalationStep {
+func newEscalationStep(remediator remediatorConfig, order int64, timeout string) escalationStep {
 	return escalationStep{
 		templateAPIVersion: remediator.apiVersion,
 		templateKind:       remediator.kind,
@@ -701,18 +711,18 @@ func newEscalationStep(remediator remediatorConfig, order int, timeout string) e
 }
 
 // snrEscalationStep returns an escalation step configured for SNR.
-func snrEscalationStep(order int, timeout string) escalationStep {
+func snrEscalationStep(order int64, timeout string) escalationStep {
 	return newEscalationStep(snrRemediator, order, timeout)
 }
 
 // testRemediationEscalationStep returns an escalation step configured for TestRemediation.
-func testRemediationEscalationStep(order int, timeout string) escalationStep {
+func testRemediationEscalationStep(order int64, timeout string) escalationStep {
 	return newEscalationStep(testRemediator, order, timeout)
 }
 
 // buildNHCWithEscalation builds an NHC CR that uses escalatingRemediations
 // instead of a single remediationTemplate. The unhealthy condition duration
-// is set to 30s for faster test cycles.
+// uses nhcparams.EscalationUnhealthyDuration so remediation triggers after that duration.
 func buildNHCWithEscalation(name string, steps []escalationStep) *unstructured.Unstructured {
 	nhc := buildNHCForWorkers(name)
 	spec := nhcSpec(nhc)
@@ -732,7 +742,7 @@ func buildNHCWithEscalation(name string, steps []escalationStep) *unstructured.U
 
 		escalations[stepIndex] = map[string]interface{}{
 			"remediationTemplate": tmpl,
-			"order":               int64(step.order),
+			"order":               step.order,
 			"timeout":             step.timeout,
 		}
 	}
@@ -741,10 +751,10 @@ func buildNHCWithEscalation(name string, steps []escalationStep) *unstructured.U
 
 	spec["unhealthyConditions"] = []interface{}{
 		map[string]interface{}{
-			"type": "Ready", "status": "False", "duration": "30s",
+			"type": "Ready", "status": "False", "duration": nhcparams.EscalationUnhealthyDuration,
 		},
 		map[string]interface{}{
-			"type": "Ready", "status": "Unknown", "duration": "30s",
+			"type": "Ready", "status": "Unknown", "duration": nhcparams.EscalationUnhealthyDuration,
 		},
 	}
 
@@ -797,6 +807,83 @@ func validEscalationStepRaw(order int64, timeout string) map[string]interface{} 
 // testRemediationStepRaw returns a valid raw escalation step for TestRemediation.
 func testRemediationStepRaw(order int64, timeout string) map[string]interface{} {
 	return newEscalationStepRaw(testRemediator, order, timeout)
+}
+
+// multiTemplateStepRaw returns a raw escalation step referencing a MultiTemplateRemediationTemplate
+// CR by name. Used to build an escalation chain with two same-Kind templates that both carry
+// the multiple-templates-support annotation (OCP-74932).
+func multiTemplateStepRaw(templateName string, order int64, timeout string) map[string]interface{} {
+	return newEscalationStepRaw(remediatorConfig{
+		apiVersion: nhcparams.TestRemediationGroup + "/" + nhcparams.TestRemediationVersion,
+		kind:       nhcparams.MultiTemplateKind,
+		name:       templateName,
+	}, order, timeout)
+}
+
+// buildAnnotatedMultiTemplate builds a MultiTemplateRemediationTemplate CR carrying the
+// multiple-templates-support annotation, so the NHC webhook permits multiple templates of
+// this Kind within one escalation chain.
+func buildAnnotatedMultiTemplate(name string) *unstructured.Unstructured {
+	return &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": nhcparams.TestRemediationGroup + "/" + nhcparams.TestRemediationVersion,
+			"kind":       nhcparams.MultiTemplateKind,
+			"metadata": map[string]interface{}{
+				"name": name,
+				"annotations": map[string]interface{}{
+					nhcparams.MultipleTemplatesSupportAnnotation: "true",
+				},
+			},
+		},
+	}
+}
+
+// setupMultipleTemplateSupport creates a dedicated MultiTemplateRemediationTemplate CRD (idempotent)
+// and two CRs of that Kind that both carry the multiple-templates-support annotation. The webhook
+// lists every template of the referenced Kind cluster-wide and requires all of them to be annotated;
+// a dedicated Kind (not the shared TestRemediationTemplate) guarantees the List returns only these
+// two annotated CRs, isolated from other specs' TestRemediationTemplate CRs. Returns the two names.
+func setupMultipleTemplateSupport(ctx context.Context) (string, string) {
+	By("Creating MultiTemplateRemediationTemplate CRD")
+
+	crd := buildTestCRD(nhcparams.MultiTemplateCRDName, nhcparams.MultiTemplateKind,
+		"multitemplateremediationtemplates", "multitemplateremediationtemplate", "mtrt")
+
+	if err := APIClient.Create(ctx, crd); err != nil && !k8serrors.IsAlreadyExists(err) {
+		Fail(fmt.Sprintf("Failed to create MultiTemplateRemediationTemplate CRD: %v", err))
+	}
+
+	waitForCRDEstablished(ctx, nhcparams.MultiTemplateCRDName)
+
+	By("Creating two annotated MultiTemplateRemediationTemplate CRs")
+
+	for _, name := range []string{nhcparams.MultiTemplateName1, nhcparams.MultiTemplateName2} {
+		tmpl := buildAnnotatedMultiTemplate(name)
+		if err := APIClient.Create(ctx, tmpl); err != nil && !k8serrors.IsAlreadyExists(err) {
+			Fail(fmt.Sprintf("Failed to create annotated MultiTemplateRemediationTemplate %q: %v", name, err))
+		}
+	}
+
+	return nhcparams.MultiTemplateName1, nhcparams.MultiTemplateName2
+}
+
+// cleanupMultipleTemplateSupport deletes the two annotated MultiTemplateRemediationTemplate CRs.
+func cleanupMultipleTemplateSupport(ctx context.Context) {
+	for _, name := range []string{nhcparams.MultiTemplateName1, nhcparams.MultiTemplateName2} {
+		deleteMultiTemplate(ctx, name)
+	}
+}
+
+// deleteMultiTemplate best-effort deletes a MultiTemplateRemediationTemplate CR by name,
+// tolerating NotFound.
+func deleteMultiTemplate(ctx context.Context, name string) {
+	tmpl := &unstructured.Unstructured{}
+	tmpl.SetGroupVersionKind(multiTemplateGVK)
+	tmpl.SetName(name)
+
+	if err := APIClient.Delete(ctx, tmpl); err != nil && !k8serrors.IsNotFound(err) {
+		GinkgoWriter.Printf("WARNING: failed to delete MultiTemplateRemediationTemplate %q: %v\n", name, err)
+	}
 }
 
 // testRemediationCRExists checks if a TestRemediation CR exists for the given node.
