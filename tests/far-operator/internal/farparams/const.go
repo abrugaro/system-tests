@@ -21,6 +21,11 @@ const (
 	// ManagerContainerName is the name of the main controller container in the FAR pod.
 	ManagerContainerName = "manager"
 
+	// DiagnosticsLogTailLines is how many trailing lines of the active FAR
+	// controller log to dump when a destructive test fails, enough to capture
+	// the reconcile that stalled without flooding the test output.
+	DiagnosticsLogTailLines = 100
+
 	// FenceAgentsRemediationCRDName is the full CRD name for FenceAgentsRemediation.
 	FenceAgentsRemediationCRDName = "fenceagentsremediations.fence-agents-remediation.medik8s.io"
 	// FenceAgentsRemediationTemplateCRDName is the full CRD name for FenceAgentsRemediationTemplate.
