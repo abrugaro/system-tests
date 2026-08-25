@@ -842,7 +842,10 @@ func buildAnnotatedMultiTemplate(name string) *unstructured.Unstructured {
 // and two CRs of that Kind that both carry the multiple-templates-support annotation. The webhook
 // lists every template of the referenced Kind cluster-wide and requires all of them to be annotated;
 // a dedicated Kind (not the shared TestRemediationTemplate) guarantees the List returns only these
-// two annotated CRs, isolated from other specs' TestRemediationTemplate CRs. Returns the two names.
+// two annotated CRs, isolated from other specs' TestRemediationTemplate CRs. It also grants the NHC
+// controller-manager SA get/list/watch on the new CRD: the webhook performs that cluster-wide List
+// as the controller SA, so without this RBAC the List returns Forbidden and the annotation check
+// fails closed, rejecting the duplicate-kind escalation (OCP-74932). Returns the two CR names.
 func setupMultipleTemplateSupport(ctx context.Context) (string, string) {
 	By("Creating MultiTemplateRemediationTemplate CRD")
 
@@ -864,13 +867,61 @@ func setupMultipleTemplateSupport(ctx context.Context) (string, string) {
 		}
 	}
 
+	By("Creating RBAC for the NHC webhook to list MultiTemplateRemediationTemplate CRs")
+
+	clusterRole := &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: nhcparams.MultiTemplateClusterRoleName,
+		},
+		Rules: []rbacv1.PolicyRule{{
+			APIGroups: []string{nhcparams.TestRemediationGroup},
+			Resources: []string{"multitemplateremediationtemplates"},
+			Verbs:     []string{"get", "list", "watch"},
+		}},
+	}
+
+	if err := APIClient.Create(ctx, clusterRole); err != nil && !k8serrors.IsAlreadyExists(err) {
+		Fail(fmt.Sprintf("Failed to create MultiTemplate ClusterRole: %v", err))
+	}
+
+	clusterRoleBinding := &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: nhcparams.MultiTemplateClusterRoleBindingName,
+		},
+		Subjects: []rbacv1.Subject{{
+			Kind:      "ServiceAccount",
+			Name:      nhcparams.NHCControllerServiceAccount,
+			Namespace: medik8sparams.OperatorNs,
+		}},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: "rbac.authorization.k8s.io",
+			Kind:     "ClusterRole",
+			Name:     nhcparams.MultiTemplateClusterRoleName,
+		},
+	}
+
+	if err := APIClient.Create(ctx, clusterRoleBinding); err != nil && !k8serrors.IsAlreadyExists(err) {
+		Fail(fmt.Sprintf("Failed to create MultiTemplate ClusterRoleBinding: %v", err))
+	}
+
 	return nhcparams.MultiTemplateName1, nhcparams.MultiTemplateName2
 }
 
-// cleanupMultipleTemplateSupport deletes the two annotated MultiTemplateRemediationTemplate CRs.
+// cleanupMultipleTemplateSupport deletes the two annotated MultiTemplateRemediationTemplate CRs
+// and the RBAC granting the NHC controller-manager SA access to that Kind.
 func cleanupMultipleTemplateSupport(ctx context.Context) {
 	for _, name := range []string{nhcparams.MultiTemplateName1, nhcparams.MultiTemplateName2} {
 		deleteMultiTemplate(ctx, name)
+	}
+
+	crb := &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: nhcparams.MultiTemplateClusterRoleBindingName}}
+	if err := APIClient.Delete(ctx, crb); err != nil && !k8serrors.IsNotFound(err) {
+		GinkgoWriter.Printf("WARNING: failed to delete MultiTemplate ClusterRoleBinding: %v\n", err)
+	}
+
+	cr := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: nhcparams.MultiTemplateClusterRoleName}}
+	if err := APIClient.Delete(ctx, cr); err != nil && !k8serrors.IsNotFound(err) {
+		GinkgoWriter.Printf("WARNING: failed to delete MultiTemplate ClusterRole: %v\n", err)
 	}
 }
 

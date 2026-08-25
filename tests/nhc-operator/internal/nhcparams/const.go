@@ -136,6 +136,15 @@ const (
 	// the webhook accepts multiple templates of the same Kind (OCP-74932).
 	MultiTemplateName2 = "multi-template-2"
 
+	// MultiTemplateClusterRoleName is the ClusterRole granting the NHC controller-manager SA
+	// get/list/watch on multitemplateremediationtemplates. The webhook lists this Kind cluster-wide
+	// (as the controller SA) to check the multiple-templates-support annotation; without this RBAC
+	// the List returns Forbidden and the webhook rejects the duplicate-kind escalation (OCP-74932).
+	MultiTemplateClusterRoleName = "multi-template-cluster-role"
+
+	// MultiTemplateClusterRoleBindingName is the ClusterRoleBinding for the above role.
+	MultiTemplateClusterRoleBindingName = "multi-template-binding"
+
 	// NHCControllerServiceAccount is the NHC controller's ServiceAccount name.
 	NHCControllerServiceAccount = "node-healthcheck-controller-manager"
 
