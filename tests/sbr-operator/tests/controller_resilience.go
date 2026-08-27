@@ -263,10 +263,15 @@ var _ = Describe(
 						"Node %s did not become unschedulable", nodeName)
 				}
 
+				cordonedSet := make(map[string]struct{}, len(cordonedNodes))
+				for _, nodeName := range cordonedNodes {
+					cordonedSet[nodeName] = struct{}{}
+				}
+
 				By("Deleting controller pods from cordoned nodes")
 
 				for _, controllerPod := range initialPods {
-					if controllerPod.Object.Spec.NodeName == keeperNode {
+					if _, cordoned := cordonedSet[controllerPod.Object.Spec.NodeName]; !cordoned {
 						continue
 					}
 
@@ -285,7 +290,7 @@ var _ = Describe(
 				By("Waiting for deleted pods to terminate")
 
 				for _, controllerPod := range initialPods {
-					if controllerPod.Object.Spec.NodeName == keeperNode {
+					if _, cordoned := cordonedSet[controllerPod.Object.Spec.NodeName]; !cordoned {
 						continue
 					}
 
@@ -326,18 +331,23 @@ var _ = Describe(
 				By("Consistently verifying controller stays available during degraded phase")
 
 				Consistently(func(assertion Gomega) {
-					dep, pullErr := pullControllerDeployment()
+					readyReplicas, pullErr := controllerReadyReplicas()
 					assertion.Expect(pullErr).ToNot(HaveOccurred())
-					assertion.Expect(dep.Object.Status.AvailableReplicas).To(
+					assertion.Expect(readyReplicas).To(
 						BeNumerically(">=", sbrparams.MinReplicasWhenDegraded),
-						"Controller deployment must maintain at least %d available replica(s)",
+						"Controller deployment must maintain at least %d ready replica(s)",
 						sbrparams.MinReplicasWhenDegraded)
 				}, sbrparams.ControllerDegradedConsistentDuration, sbrparams.DefaultPollInterval).Should(Succeed(),
 					"Controller availability was not sustained during the single-worker degraded phase")
 
 				By("Uncordoning all worker nodes")
 
-				uncordonNodesBestEffort(ctx, cordonedNodes)
+				for _, nodeName := range cordonedNodes {
+					Expect(setNodeUnschedulable(ctx, nodeName, false)).To(Succeed(),
+						"Failed to uncordon node %s", nodeName)
+				}
+
+				cordonedNodes = nil
 
 				By("Verifying controller scales back to expected replicas on different nodes")
 
@@ -387,19 +397,35 @@ var _ = Describe(
 					"expected %d ready replicas before handover test",
 					sbrparams.ExpectedReplicas)
 
-				By("Reading the leader election lease to identify the current leader")
+				By("Reading the lease and resolving the current leader to a live pod")
 
-				oldLeaderPodName, oldLeaderIdentity, err := helpers.GetLeaderPodName(
-					ctx, APIClient, sbrparams.ControllerLeaseName, medik8sparams.OperatorNs)
-				Expect(err).ToNot(HaveOccurred(), "Failed to identify SBR controller leader")
+				var (
+					oldLeaderPodName  string
+					oldLeaderIdentity string
+					leaderPod         *pod.Builder
+				)
+
+				// Leader election is eventually-consistent: the prior resilience spec
+				// (run first in this Ordered, ContinueOnFailure container) deletes
+				// controller pods, so the Lease can transiently name a pod that no
+				// longer exists until re-election updates it. Retry until the Lease
+				// resolves to a live pod instead of failing on a one-shot lookup.
+				Eventually(func(assertion Gomega) {
+					var leaderErr error
+
+					oldLeaderPodName, oldLeaderIdentity, leaderErr = helpers.GetLeaderPodName(
+						ctx, APIClient, sbrparams.ControllerLeaseName, medik8sparams.OperatorNs)
+					assertion.Expect(leaderErr).ToNot(HaveOccurred(),
+						"Failed to identify SBR controller leader")
+
+					leaderPod, leaderErr = pod.Pull(APIClient, oldLeaderPodName, medik8sparams.OperatorNs)
+					assertion.Expect(leaderErr).ToNot(HaveOccurred(),
+						"Lease names pod %q (identity %q) which is not yet a live pod",
+						oldLeaderPodName, oldLeaderIdentity)
+				}, sbrparams.ControllerHandoverTimeout, sbrparams.DefaultPollInterval).Should(Succeed(),
+					"Controller lease did not resolve to a live controller pod")
 
 				GinkgoWriter.Printf("Current leader identity: %s\n", oldLeaderIdentity)
-
-				By("Finding the leader controller pod")
-
-				leaderPod, err := pod.Pull(APIClient, oldLeaderPodName, medik8sparams.OperatorNs)
-				Expect(err).ToNot(HaveOccurred(),
-					"Could not pull leader pod %q (from identity %q)", oldLeaderPodName, oldLeaderIdentity)
 
 				By("Deleting the leader controller pod " + leaderPod.Object.Name)
 
