@@ -15,12 +15,10 @@ FROM registry.access.redhat.com/ubi9/ubi:latest
 COPY --from=fetcher /usr/local/go /usr/local/go
 
 ARG GO_VER=go1.26.0
-ARG GINKGO_VER=ginkgo@v2.28.1
 ARG CONTAINERUSER=testuser
 
 LABEL description="system-tests development image"
 LABEL go.version=${GO_VER}
-LABEL ginkgo.version=${GINKGO_VER}
 LABEL container.user=${CONTAINERUSER}
 
 ENV PATH "$PATH:/usr/local/go/bin:/root/go/bin"
@@ -30,7 +28,8 @@ RUN dnf install -y tar gcc make && \
 
 USER ${CONTAINERUSER}
 WORKDIR /home/${CONTAINERUSER}
-RUN go install github.com/onsi/ginkgo/v2/${GINKGO_VER}
+COPY --chown=${CONTAINERUSER}:${CONTAINERUSER} go.mod go.sum ./
+RUN go install github.com/onsi/ginkgo/v2/ginkgo
 COPY --chown=${CONTAINERUSER}:${CONTAINERUSER} . .
 
 ENTRYPOINT ["scripts/test-runner.sh"]

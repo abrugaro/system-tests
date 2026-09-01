@@ -6,11 +6,17 @@ on:
   workflow_dispatch:
 
   push:
+    branches:
+      - main
+      - 'release-\d.\d\d'
 
   pull_request:
     branches:
       - main
       - 'release-\d.\d\d'
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -29,13 +35,21 @@ jobs:
       - name: Run lint
         run: make lint
 
-      - name: Install
-        run: make install-ginkgo
+      - name: Install ginkgo
+        run: go install github.com/onsi/ginkgo/v2/ginkgo
 
       - name: Run ginkgo Dry Run
         run: ginkgo run -vv -r --dry-run ./tests/
         env:
           ECO_DRY_RUN: true
-      
+
       - name: Run unit tests
         run: make test
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build Dockerfile
+        run: docker build -t system-tests:ci -f Dockerfile .
