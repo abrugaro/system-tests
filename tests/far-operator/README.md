@@ -238,3 +238,28 @@ Validates FAR operator behavior when all worker nodes are cordoned, simulating a
 - **Env vars (required)**: AWS credentials provisioned by the `medik8s-aws-credentials` CI step
 - **Standalone**: `ginkgo --label-filter="far && topology:zero-worker" ./tests/far-operator/...`
 - **Pass criteria**: FAR deployment Ready before test, FAR deployment has 0 Ready replicas after pods deleted on cordoned workers, FAR deployment recovers to 2 Ready replicas after uncordoning
+
+### 20. Verify FAR Must-Gather Collection During Active Remediation ([OCP-61480](https://polarion.engineering.redhat.com/polarion/#/project/OSE/workitem?id=OCP-61480))
+
+Triggers a FAR remediation on a non-leader worker node, waits for the Processing condition, then runs `oc adm must-gather` with the medik8s image and validates the collected output. Confirms the must-gather image captures FAR operator data while a remediation is actively in progress.
+
+- **Operators**: FAR v0.8.0+
+- **Cluster**: AWS, 3+ Ready worker nodes
+- **Storage**: None
+- **Environment**: Connected (must-gather image must be pullable)
+- **Labels**: `disruption:destructive`, `platform:aws`, `component:controller`, `tier:acceptance`, `frequency:weekly`
+- **Env vars (optional, has default)**: `MUST_GATHER_IMAGE` (overrides the default medik8s must-gather image)
+- **Standalone**: `ginkgo --label-filter="far" --focus="must-gather during active remediation" ./tests/far-operator/...`
+- **Pass criteria**: must-gather output contains a node YAML for every cluster node, FAR CRD definitions, and operator namespace resources; the fenced node reboots (boot ID changes) and returns Ready
+
+### 21. Verify FAR Timed-Out Remediation Retry Logging ([OCP-70873](https://polarion.engineering.redhat.com/polarion/#/project/OSE/workitem?id=OCP-70873))
+
+Deletes the FAR controller pods to isolate logs, then creates a FAR CR with an invalid AWS instance ID so every fence attempt fails, and verifies the active controller logs one failure entry per retry. Confirms the retry mechanism logs failure messages matching the configured retry count.
+
+- **Operators**: FAR v0.8.0+
+- **Cluster**: AWS, 3+ Ready worker nodes
+- **Storage**: None
+- **Environment**: Connected
+- **Labels**: `disruption:nondestructive`, `platform:aws`, `component:remediation`, `tier:acceptance`, `frequency:weekly`
+- **Standalone**: `ginkgo --label-filter="far" --focus="timeout messages matching retry count" ./tests/far-operator/...`
+- **Pass criteria**: the active FAR controller log contains exactly 10 (`FARCRRetryCount`) `command failed` entries, one per retry

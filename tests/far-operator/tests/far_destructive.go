@@ -3,6 +3,7 @@ package tests
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -18,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/rh-ecosystem-edge/eco-goinfra/pkg/clients"
 	"github.com/rh-ecosystem-edge/eco-goinfra/pkg/deployment"
 	"github.com/rh-ecosystem-edge/eco-goinfra/pkg/reportxml"
 
@@ -177,6 +179,7 @@ var _ = Describe("FAR Destructive Tests",
 				GinkgoWriter.Println(
 					"Test failed - collecting diagnostics")
 				logFARControllerState(ctx, APIClient)
+				logFARRemediationDiagnostics(ctx, APIClient, currentFARName)
 			}
 
 			if currentFARName != "" {
@@ -840,22 +843,64 @@ var _ = Describe("FAR Destructive Tests",
 								farparams.MinWorkersForTwoWorkerTest, workerCount))
 						}
 
-						By("Finding active leader node to use as fencing target")
+						By("Identifying the two nodes hosting the FAR controller replicas")
+
+						// The 2-worker premise (a durable ReadyReplicas dip while the fenced
+						// leader is down) only holds if the two kept-schedulable workers are
+						// exactly the two nodes already running the two controller replicas.
+						// A random survivor can leave the second replica on a node that then
+						// gets cordoned while the survivor sits empty; fencing the leader then
+						// lets the replacement replica schedule onto the empty survivor and
+						// ReadyReplicas recovers to 2 before the dip is observable. Pin both
+						// kept nodes to the live replica placement instead.
+						var replicaNodes []string
 
 						Eventually(func() error {
-							var leaderErr error
+							pods, podsErr := farutils.GetFARControllerPods(ctx, APIClient)
+							if podsErr != nil {
+								return podsErr
+							}
 
-							leaderNode, leaderErr = farutils.GetActiveFARControllerNode(ctx, APIClient)
+							if len(pods) != int(farparams.ExpectedReplicas) {
+								return fmt.Errorf("expected %d running controller replicas, found %d",
+									farparams.ExpectedReplicas, len(pods))
+							}
 
-							return leaderErr
+							nodes := make(map[string]struct{}, len(pods))
+							for i := range pods {
+								if node := pods[i].Spec.NodeName; node != "" {
+									nodes[node] = struct{}{}
+								}
+							}
+
+							if len(nodes) != int(farparams.ExpectedReplicas) {
+								return fmt.Errorf(
+									"controller replicas are not spread across %d distinct nodes: %v",
+									farparams.ExpectedReplicas, nodes)
+							}
+
+							replicaNodes = replicaNodes[:0]
+							for node := range nodes {
+								replicaNodes = append(replicaNodes, node)
+							}
+
+							return nil
 						}, farparams.ControllerHandoverTimeout, farparams.DefaultPollInterval).Should(Succeed())
 
-						By("Selecting a survivor worker (non-leader) to keep schedulable")
+						By("Verifying both replica nodes are schedulable workers")
 
-						survivor, err := helpers.SelectWorkerNode(ctx, APIClient, leaderNode)
-						Expect(err).ToNot(HaveOccurred())
+						for _, name := range replicaNodes {
+							node := &corev1.Node{}
+							Expect(APIClient.Get(ctx, client.ObjectKey{Name: name}, node)).To(Succeed())
 
-						keepNames := []string{leaderNode, survivor.Name}
+							if _, isWorker := node.Labels["node-role.kubernetes.io/worker"]; !isWorker {
+								Skip(fmt.Sprintf(
+									"2-worker test requires both controller replicas on worker nodes; "+
+										"%s is not a worker", name))
+							}
+						}
+
+						keepNames := append([]string(nil), replicaNodes...)
 
 						// Declared at It scope so it can be uncordoned inline (to restore
 						// schedulable capacity before verifying FAR recovery) and again via
@@ -880,26 +925,54 @@ var _ = Describe("FAR Destructive Tests",
 								len(cordonedNodes), cordonedNodes)
 						}
 
-						leaderNodeObj, err := helpers.SelectWorkerNode(ctx, APIClient, survivor.Name)
-						Expect(err).ToNot(HaveOccurred())
-						Expect(leaderNodeObj.Name).To(Equal(leaderNode),
-							"Expected leader node %s but got %s", leaderNode, leaderNodeObj.Name)
+						// Clean CRI-O overlay on both candidate nodes up front. The fenced
+						// node is chosen from the live lease immediately before creating the
+						// FAR CR (below), so this disruptive debug-pod step must not run
+						// between leader selection and fencing, where it could flip leadership.
+						By("Cleaning CRI-O overlay storage on both replica nodes")
 
-						targetNode = leaderNodeObj
+						for _, name := range replicaNodes {
+							removeWorkloadImage(ctx, name)
+						}
+
+						By("Selecting the current leader as the fence target")
+
+						// Re-read the lease AFTER the disruptive cleanup so the target reflects
+						// the leader that is active now, and record that same holder as the
+						// pre-reboot identity. Only fast API calls run between here and CR
+						// creation, so leadership cannot silently move off the target.
+						var survivorName string
+
+						Eventually(func() error {
+							currentLeader, leaderErr := farutils.GetActiveFARControllerNode(ctx, APIClient)
+							if leaderErr != nil {
+								return leaderErr
+							}
+
+							if currentLeader != replicaNodes[0] && currentLeader != replicaNodes[1] {
+								return fmt.Errorf("leader %q is not on either kept replica node %v",
+									currentLeader, replicaNodes)
+							}
+
+							leaderNode = currentLeader
+							if replicaNodes[0] == leaderNode {
+								survivorName = replicaNodes[1]
+							} else {
+								survivorName = replicaNodes[0]
+							}
+
+							return nil
+						}, farparams.ControllerHandoverTimeout, farparams.DefaultPollInterval).Should(Succeed())
+
+						targetNode = &corev1.Node{}
+						Expect(APIClient.Get(ctx, client.ObjectKey{Name: leaderNode}, targetNode)).To(Succeed())
 						GinkgoWriter.Printf("2-worker target (leader): %s, survivor: %s\n",
-							targetNode.Name, survivor.Name)
-
-						By("Cleaning CRI-O overlay storage on " + targetNode.Name)
-						removeWorkloadImage(ctx, targetNode.Name)
+							targetNode.Name, survivorName)
 
 						By("Recording boot ID before remediation")
 
 						oldBootID, err := farutils.GetNodeBootIDFromAPI(ctx, APIClient, targetNode.Name)
 						Expect(err).ToNot(HaveOccurred())
-
-						By("Creating a test workload pod pinned to " + targetNode.Name)
-
-						workloadPod := createWorkloadPod(ctx, APIClient, targetNode.Name)
 
 						By("Recording pre-reboot lease holder for failover verification")
 
@@ -912,6 +985,10 @@ var _ = Describe("FAR Destructive Tests",
 							"Lease has no holder before fencing the leader")
 						oldLeaderHolder := *preRebootLease.Spec.HolderIdentity
 						GinkgoWriter.Printf("Pre-reboot lease holder: %s\n", oldLeaderHolder)
+
+						By("Creating a test workload pod pinned to " + targetNode.Name)
+
+						workloadPod := createWorkloadPod(ctx, APIClient, targetNode.Name)
 
 						By("Creating FAR CR targeting leader node " + targetNode.Name)
 
@@ -1323,6 +1400,116 @@ func logFARControllerState(ctx context.Context, k8sClient client.Client) {
 		GinkgoWriter.Printf("FAR controller pod %s: Phase=%s, Node=%s, Ready=%v\n",
 			pod.Name, pod.Status.Phase, pod.Spec.NodeName, ready)
 	}
+}
+
+// logFARRemediationDiagnostics dumps, on test failure, the ground-truth state
+// needed to classify a remediation failure that pod-phase logging alone cannot:
+// the FAR CR's status conditions (whether the controller reached Succeeded, and
+// the fence-action outcome) and the active controller's recent logs (where a
+// stalled reconcile surfaces). Called while currentFARName is still set, before
+// the cleanup path deletes the CR. Both halves are best-effort so a diagnostics
+// fetch error never masks the original test failure.
+func logFARRemediationDiagnostics(ctx context.Context, apiClient *clients.Settings, farName string) {
+	if farName != "" {
+		logFARCRConditions(ctx, apiClient, farName)
+	}
+
+	logActiveControllerLogs(ctx, apiClient)
+}
+
+// logFARCRConditions prints every status condition on the named FAR CR so a
+// failed remediation shows its terminal (or stuck) state instead of just the
+// controller pod being Ready elsewhere.
+func logFARCRConditions(ctx context.Context, k8sClient client.Client, farName string) {
+	farObj := &unstructured.Unstructured{}
+	farObj.SetGroupVersionKind(farGVK)
+
+	if err := k8sClient.Get(ctx, client.ObjectKey{
+		Name:      farName,
+		Namespace: medik8sparams.OperatorNs,
+	}, farObj); err != nil {
+		GinkgoWriter.Printf("WARNING: could not fetch FAR CR %s for diagnostics: %v\n", farName, err)
+
+		return
+	}
+
+	conditions, found, err := unstructured.NestedSlice(farObj.Object, "status", "conditions")
+	if err != nil || !found {
+		GinkgoWriter.Printf("FAR CR %s has no status conditions yet (found=%v, err=%v)\n",
+			farName, found, err)
+
+		return
+	}
+
+	GinkgoWriter.Printf("FAR CR %s status conditions:\n", farName)
+
+	for _, c := range conditions {
+		condMap, ok := c.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		GinkgoWriter.Printf("  type=%v status=%v reason=%v message=%q\n",
+			condMap["type"], condMap["status"], condMap["reason"], condMap["message"])
+	}
+}
+
+// logActiveControllerLogs dumps the trailing lines of the active FAR controller
+// pod's log, resolved via the leader-election lease so the output is the replica
+// that actually reconciled the remediation rather than a passive standby.
+func logActiveControllerLogs(ctx context.Context, apiClient *clients.Settings) {
+	leaderNode, err := farutils.GetActiveFARControllerNode(ctx, apiClient)
+	if err != nil {
+		GinkgoWriter.Printf("WARNING: could not resolve active FAR controller for logs: %v\n", err)
+
+		return
+	}
+
+	pods, err := farutils.GetFARControllerPods(ctx, apiClient)
+	if err != nil {
+		GinkgoWriter.Printf("WARNING: could not list FAR controller pods for logs: %v\n", err)
+
+		return
+	}
+
+	var activePodName string
+
+	for i := range pods {
+		if pods[i].Spec.NodeName == leaderNode {
+			activePodName = pods[i].Name
+
+			break
+		}
+	}
+
+	if activePodName == "" {
+		GinkgoWriter.Printf("WARNING: no FAR controller pod found on leader node %s\n", leaderNode)
+
+		return
+	}
+
+	logs, err := getControllerContainerLogs(
+		apiClient, activePodName, farparams.ManagerContainerName, medik8sparams.OperatorNs)
+	if err != nil {
+		GinkgoWriter.Printf("WARNING: could not fetch logs for controller pod %s: %v\n", activePodName, err)
+
+		return
+	}
+
+	GinkgoWriter.Printf("Last %d log lines from active FAR controller pod %s:\n%s\n",
+		farparams.DiagnosticsLogTailLines, activePodName,
+		tailLines(logs, farparams.DiagnosticsLogTailLines))
+}
+
+// tailLines returns the last maxLines lines of s, or all of s when it has fewer
+// than maxLines lines.
+func tailLines(s string, maxLines int) string {
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	if len(lines) <= maxLines {
+		return strings.Join(lines, "\n")
+	}
+
+	return strings.Join(lines[len(lines)-maxLines:], "\n")
 }
 
 func logPodDiagnostics(ctx context.Context, k8sClient client.Client, pod *corev1.Pod) {
