@@ -179,6 +179,13 @@ func buildNHC(name string) *unstructured.Unstructured {
 				"name": name,
 			},
 			"spec": map[string]interface{}{
+				// NHC requires exactly one of minHealthy/maxUnhealthy; omitting both is
+				// rejected by the validating webhook ("one of minHealthy and maxUnhealthy
+				// should be specified"). Since NHC v0.10.0 (maxUnhealthy support, PR #372)
+				// the previous 51% default on minHealthy was removed to make the two fields
+				// mutually exclusive, so it must now be set explicitly. 51% matches the
+				// former default and the sample CRs.
+				"minHealthy": "51%",
 				"selector": map[string]interface{}{
 					"matchExpressions": []interface{}{
 						map[string]interface{}{
