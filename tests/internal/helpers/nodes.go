@@ -86,3 +86,35 @@ func CountReadyWorkerNodes(ctx context.Context, k8sClient client.Client) (int, e
 
 	return count, nil
 }
+
+// ListSchedulableWorkerNodes returns Ready, schedulable nodes that carry the worker role and
+// do NOT carry a master or control-plane role label. Excluding control-plane nodes keeps
+// resilience/cordon tests from touching control-plane capacity on compact clusters.
+func ListSchedulableWorkerNodes(ctx context.Context, k8sClient client.Client) ([]corev1.Node, error) {
+	nodeList := &corev1.NodeList{}
+	if err := k8sClient.List(ctx, nodeList, client.MatchingLabels{"node-role.kubernetes.io/worker": ""}); err != nil {
+		return nil, fmt.Errorf("failed to list worker nodes: %w", err)
+	}
+
+	var eligible []corev1.Node
+
+	for i := range nodeList.Items {
+		node := &nodeList.Items[i]
+
+		if node.Spec.Unschedulable || !IsNodeReady(node) {
+			continue
+		}
+
+		if _, hasMaster := node.Labels["node-role.kubernetes.io/master"]; hasMaster {
+			continue
+		}
+
+		if _, hasCP := node.Labels["node-role.kubernetes.io/control-plane"]; hasCP {
+			continue
+		}
+
+		eligible = append(eligible, *node)
+	}
+
+	return eligible, nil
+}

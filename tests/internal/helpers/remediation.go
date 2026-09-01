@@ -55,35 +55,51 @@ func DeleteRemediationCR(
 	}
 }
 
+// GetLeaderPodName reads the leader election Lease and returns the leader pod
+// name together with the raw holder identity, validating the <podname>_<uuid>
+// holderIdentity format. Callers that only need the node name should use
+// GetActiveControllerNode, which builds on this helper.
+func GetLeaderPodName(
+	ctx context.Context, k8sClient client.Client,
+	leaseName, namespace string,
+) (podName, identity string, err error) {
+	lease := &coordinationv1.Lease{}
+
+	if getErr := k8sClient.Get(ctx, client.ObjectKey{
+		Name:      leaseName,
+		Namespace: namespace,
+	}, lease); getErr != nil {
+		if k8serrors.IsNotFound(getErr) {
+			return "", "", fmt.Errorf("controller lease %q not found in namespace %s",
+				leaseName, namespace)
+		}
+
+		return "", "", fmt.Errorf("failed to get controller lease: %w", getErr)
+	}
+
+	if lease.Spec.HolderIdentity == nil {
+		return "", "", fmt.Errorf("controller lease %q has no holder", leaseName)
+	}
+
+	identity = *lease.Spec.HolderIdentity
+
+	podName, _, ok := strings.Cut(identity, "_")
+	if !ok || podName == "" {
+		return "", "", fmt.Errorf("unexpected leader holderIdentity format: %q", identity)
+	}
+
+	return podName, identity, nil
+}
+
 // GetActiveControllerNode returns the node name hosting the active controller
 // pod by inspecting the leader election Lease.
 func GetActiveControllerNode(
 	ctx context.Context, k8sClient client.Client,
 	leaseName, namespace string,
 ) (string, error) {
-	lease := &coordinationv1.Lease{}
-
-	if err := k8sClient.Get(ctx, client.ObjectKey{
-		Name:      leaseName,
-		Namespace: namespace,
-	}, lease); err != nil {
-		if k8serrors.IsNotFound(err) {
-			return "", fmt.Errorf("controller lease %q not found in namespace %s",
-				leaseName, namespace)
-		}
-
-		return "", fmt.Errorf("failed to get controller lease: %w", err)
-	}
-
-	if lease.Spec.HolderIdentity == nil {
-		return "", fmt.Errorf("controller lease %q has no holder", leaseName)
-	}
-
-	holderID := *lease.Spec.HolderIdentity
-
-	podName, _, ok := strings.Cut(holderID, "_")
-	if !ok || podName == "" {
-		return "", fmt.Errorf("unexpected leader holderIdentity format: %q", holderID)
+	podName, _, err := GetLeaderPodName(ctx, k8sClient, leaseName, namespace)
+	if err != nil {
+		return "", err
 	}
 
 	pod := &corev1.Pod{}
