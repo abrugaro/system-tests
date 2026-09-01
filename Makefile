@@ -8,7 +8,7 @@ BASE_IMG ?= system-tests
 BASE_TAG ?= latest
 
 ## Tool Versions
-GINKGO_VERSION ?= v2.28.1
+GINKGO_VERSION ?= $(shell grep 'github.com/onsi/ginkgo/v2 ' go.mod | awk '{print $$2}')
 
 ## Location to install dependencies to
 LOCALBIN ?= $(shell pwd)/bin
