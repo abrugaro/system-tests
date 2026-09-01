@@ -6,11 +6,17 @@ on:
   workflow_dispatch:
 
   push:
+    branches:
+      - main
+      - 'release-\d.\d\d'
 
   pull_request:
     branches:
       - main
       - 'release-\d.\d\d'
+
+permissions:
+  contents: read
 
 jobs:
   build:
