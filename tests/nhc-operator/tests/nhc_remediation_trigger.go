@@ -280,6 +280,7 @@ var _ = Describe("NHC Functional -- Remediation Trigger and CR Lifecycle",
 				By("Finding the node hosting the active NHC controller")
 
 				var err error
+
 				nhcControllerNodeName, err = helpers.GetActiveControllerNode(
 					ctx, APIClient, nhcparams.ControllerLeaseName, medik8sparams.OperatorNs)
 				Expect(err).ToNot(HaveOccurred(),
@@ -371,7 +372,6 @@ var _ = Describe("NHC Functional -- Remediation Trigger and CR Lifecycle",
 				// remediated by TestRemediation.
 				// SSH availability is checked in BeforeAll; this test uses SSH
 				// to restart kubelet because TestRemediation has no controller.
-
 				By("Setting up TestRemediation dummy CRDs and RBAC")
 
 				setupTestRemediationResources(ctx)
@@ -428,10 +428,21 @@ var _ = Describe("NHC Functional -- Remediation Trigger and CR Lifecycle",
 				// TestRemediation has no controller, so the node stays unhealthy.
 				// Restart kubelet via SSH to recover (oc debug can't schedule
 				// pods when kubelet is stopped).
-				By("Starting kubelet via SSH to recover node")
+				By("Starting kubelet via SSH to recover node (best-effort)")
 
-				Expect(startKubeletForRemediation(ctx, targetWorkerName)).To(Succeed(),
-					"Failed to start kubelet on %s", targetWorkerName)
+				// Best-effort SSH kubelet restart; if the AWS Nitro watchdog has
+				// already rebooted the node the SSH lands mid-reboot ("Connection
+				// timed out during banner exchange"). kubelet auto-starts on boot,
+				// so the waitForNHCPhase + WaitForNodeReady gates below are the real
+				// recovery checks. MUST NOT use Expect here -- matches the
+				// best-effort convention used by this suite's JustAfterEach cleanups.
+				if sshErr := startKubeletForRemediation(ctx, targetWorkerName); sshErr != nil {
+					GinkgoWriter.Printf(
+						"WARNING: SSH kubelet restart failed for %s (best-effort): %v\n",
+						targetWorkerName, sshErr)
+					AddReportEntry("ssh-kubelet-restart-failed",
+						fmt.Sprintf("node %s: %v", targetWorkerName, sshErr))
+				}
 
 				By("Waiting for TestRemediation NHC to return to Enabled")
 
@@ -457,7 +468,6 @@ var _ = Describe("NHC Functional -- Remediation Trigger and CR Lifecycle",
 				// first via SNR; the slower one (11s) should NOT start remediating.
 				// Deleting the non-remediating NHC should succeed.
 				// Recovery is automatic: SNR reboots the node.
-
 				By("Creating first SNR-based NHC CR (10s, triggers first)")
 
 				nhcFirst := buildNHCForWorkers(nhcparams.NHCSecondTestName)
