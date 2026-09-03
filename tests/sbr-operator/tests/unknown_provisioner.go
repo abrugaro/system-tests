@@ -200,25 +200,53 @@ var _ = Describe(
 				Expect(APIClient.Create(context.TODO(), sbrc)).To(Succeed(),
 					"SBRC %q must be created successfully", sbrparams.UnknownProvSBRCName)
 
-				By("Waiting for SBRC agent DaemonSet to be created " +
-					"(operator must delete the stale PVC and recreate it via testRWXSupport)")
-
-				dsName := sbrparams.SBRAgentDaemonSetPrefix + sbrparams.UnknownProvSBRCName
+				By(fmt.Sprintf("Verifying stale PVC %q no longer references fake StorageClass %q",
+					testPVCName, fakeSC))
 
 				Eventually(func() error {
-					_, err := APIClient.DaemonSets(medik8sparams.OperatorNs).Get(
-						context.TODO(), dsName, metav1.GetOptions{})
-					if err != nil {
-						return fmt.Errorf("DaemonSet %s not found — operator likely blocked "+
-							"by stale PVC %q (AlreadyExists on testRWXSupport): %w",
-							dsName, testPVCName, err)
+					pvc, getErr := APIClient.CoreV1Interface.PersistentVolumeClaims(medik8sparams.OperatorNs).Get(
+						context.TODO(), testPVCName, metav1.GetOptions{})
+					if k8serrors.IsNotFound(getErr) {
+						return nil
+					}
+
+					if getErr != nil {
+						return getErr
+					}
+
+					if pvc.Spec.StorageClassName != nil && *pvc.Spec.StorageClassName == fakeSC {
+						return fmt.Errorf("stale PVC %q still references fake SC %q — operator likely blocked "+
+							"by AlreadyExists on testRWXSupport (see RHWA-1017 / PR #60)",
+							testPVCName, fakeSC)
 					}
 
 					return nil
 				}, sbrparams.UnknownProvReconcileTimeout, sbrparams.DefaultPollInterval).Should(Succeed(),
-					"SBRC %q reconciliation failed — operator could not handle stale PVC %q "+
-						"(expected best-effort delete before PVC creation, see PR #60)",
-					sbrparams.UnknownProvSBRCName, testPVCName)
+					"Operator should handle stale PVC %q before proceeding with testRWXSupport",
+					testPVCName)
+
+				By(fmt.Sprintf("Verifying RWX test PVC %q was deleted after testRWXSupport completed",
+					testPVCName))
+
+				Eventually(func() error {
+					_, getErr := APIClient.CoreV1Interface.PersistentVolumeClaims(medik8sparams.OperatorNs).Get(
+						context.TODO(), testPVCName, metav1.GetOptions{})
+					if k8serrors.IsNotFound(getErr) {
+						return nil
+					}
+
+					if getErr != nil {
+						return getErr
+					}
+
+					return fmt.Errorf("RWX test PVC %q still present — testRWXSupport cleanup likely did not run",
+						testPVCName)
+				}, sbrparams.UnknownProvReconcileTimeout, sbrparams.DefaultPollInterval).Should(Succeed(),
+					"testRWXSupport should delete transient PVC %q after validating RWX access", testPVCName)
+
+				By("Waiting for SBRC agent DaemonSet pods to reach Ready (not CrashLoopBackOff)")
+
+				waitForSBRCReady(sbrparams.UnknownProvSBRCName)
 
 				sbrcReconciled = true
 			})

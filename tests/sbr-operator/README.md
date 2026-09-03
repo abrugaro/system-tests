@@ -192,23 +192,25 @@ support. If a prior run left behind a PVC with the same name but a different Sto
 `AlreadyExists` unless the operator removes the stale object first.
 
 The test pre-creates such a stale PVC, then creates an SBRC pointing at the unknown-provisioner
-StorageClass and observes whether reconciliation can proceed to agent DaemonSet creation.
+StorageClass and observes whether reconciliation proceeds past `testRWXSupport`: the stale PVC
+is handled, the transient RWX test PVC is removed after validation, and agent DaemonSet pods
+reach Ready.
 
 - **Operators**: SBR (bug fix coverage for RHWA-1017)
 - **Cluster**: Any topology where the NFS dynamic provisioner step has deployed StorageClass `nfs-sbr-dynamic`
 - **Storage**: NFS dynamic provisioner (`nfs-sbr-dynamic`); suite skips when that StorageClass is absent
 - **Environment**: Connected (NFS provisioner deployed by CI)
 - **Standalone**: `ginkgo --label-filter="sbr" --focus="stale RWX test PVC" ./tests/sbr-operator/...`
-- **Pass criteria**: SBRC agent DaemonSet for `test-sbrc-unknown-prov` appears within the reconciliation timeout, suggesting the stale PVC was handled and `testRWXSupport` completed
+- **Pass criteria**: Stale PVC no longer references the fake StorageClass; RWX test PVC `<sbrc-name>-rwx-test` is deleted after `testRWXSupport`; all agent DaemonSet pods for `test-sbrc-unknown-prov` reach Ready (not stuck in CrashLoopBackOff from reconciliation failure)
 
 ### 13. Verify shared-storage PV is not left in Released state after SBRC deletion (RHWA-1046 & RHWA-1047)
 
-Runs after test 9 in the same ordered suite. Once the SBRC has reconciled and bound shared
+Runs after test 12 in the same ordered suite. Once the SBRC has reconciled and bound shared
 storage, the test deletes the SBRC to exercise `handleDeletion` PV cleanup. For dynamically
 provisioned PVs with `Retain` reclaim policy, the operator is expected to patch reclaim policy
 to `Delete` so the volume can be released instead of remaining in `Released` with `Retain`.
 
-Skips when test 9 did not reconcile (no shared-storage PVC was consumed).
+Skips when test 12 did not reconcile (no shared-storage PVC was consumed).
 
 - **Operators**: SBR (bug fix coverage for RHWA-1046 and RHWA-1047)
 - **Cluster**: Same as test 9 (requires successful reconciliation from test 9)
