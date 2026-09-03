@@ -136,7 +136,53 @@ independently using a short-lived privileged hostPID pod per node.
 - **Standalone**: `ginkgo --label-filter="sbr" --focus="Verify watchdog device" ./tests/sbr-operator/...`
 - **Pass criteria**: All hardware watchdog devices are character devices; nodes without hardware watchdog have softdog.ko present in the kernel module tree
 
-### 9. Verify operator handles a stale RWX test PVC and reconciles successfully (RHWA-1017)
+### 9. Verify SBR Must-Gather Collects Diagnostic Data ([OCP-88733](https://polarion.engineering.redhat.com/polarion/#/project/OSE/workitem?id=OCP-88733))
+
+Validates that `oc adm must-gather` with the medik8s must-gather image collects
+SBR-related diagnostic data: node manifests, CRD definitions, and
+MachineHealthCheck resources.
+
+- **Operators**: SBR v0.3.0
+- **Cluster**: Any topology
+- **Storage**: None
+- **Environment**: Connected by default; the image defaults to the upstream
+  `quay.io/medik8s/must-gather:latest` (matching the FAR suite), and its resolved
+  digest is logged on every run. Disconnected clusters can set `MUST_GATHER_IMAGE`
+  to an accessible mirrored image
+- **Standalone**: `ginkgo --label-filter="sbr" --focus="must-gather" ./tests/sbr-operator/...`
+- **Pass criteria**: SBR deployment is Ready; must-gather completes successfully; output contains node YAMLs for all cluster nodes, all 3 SBR CRD definition files, and MachineHealthCheck data
+
+### 10. Verify Controller Availability With One Worker (Controller Resilience)
+
+Validates that the SBR controller maintains at least one available replica when all but one
+worker node is cordoned. The SBR deployment uses `topologySpreadConstraints` with
+`whenUnsatisfiable: DoNotSchedule`, so only one replica can schedule on a single node.
+
+The test cordons all eligible workers except one, deletes controller pods from cordoned nodes,
+and verifies the surviving replica stays available throughout the degraded phase. After
+uncordoning, verifies the deployment scales back to the expected replica count on different nodes.
+
+- **Operators**: SBR v0.3.0
+- **Cluster**: 3+ schedulable worker-only nodes (standard AWS Prow cluster)
+- **Storage**: None
+- **Environment**: Connected or disconnected
+- **Standalone**: `ginkgo --label-filter="sbr" --focus="controller availability with one worker" ./tests/sbr-operator/...`
+- **Pass criteria**: At least 1 controller pod remains Running on the uncordoned node; availability sustained for 30s (Consistently); deployment scales back to 2 replicas on different nodes after uncordoning
+
+### 11. Verify Controller Leadership Handover
+
+Validates that when the active SBR controller pod (the lease holder) is deleted, leadership
+transfers to a different controller pod. Follows the same pattern as the FAR controller
+lifecycle test (OCP-70636).
+
+- **Operators**: SBR v0.3.0
+- **Cluster**: Any topology with at least 2 schedulable worker-only (non-control-plane) nodes
+- **Storage**: None
+- **Environment**: Connected or disconnected
+- **Standalone**: `ginkgo --label-filter="sbr" --focus="controller leadership" ./tests/sbr-operator/...`
+- **Pass criteria**: Lease `holderIdentity` changes to a different Running controller pod; deployment returns to full ready replicas
+
+### 12. Verify operator handles a stale RWX test PVC and reconciles successfully (RHWA-1017)
 
 Covers the `testRWXSupport` reconciliation path used when an SBRC references a StorageClass
 whose provisioner is not recognized by SBR (for example `sbr.io/nfs-provisioner` on the CI
@@ -155,7 +201,7 @@ StorageClass and observes whether reconciliation can proceed to agent DaemonSet 
 - **Standalone**: `ginkgo --label-filter="sbr" --focus="stale RWX test PVC" ./tests/sbr-operator/...`
 - **Pass criteria**: SBRC agent DaemonSet for `test-sbrc-unknown-prov` appears within the reconciliation timeout, suggesting the stale PVC was handled and `testRWXSupport` completed
 
-### 10. Verify shared-storage PV is not left in Released state after SBRC deletion (RHWA-1046 & RHWA-1047)
+### 13. Verify shared-storage PV is not left in Released state after SBRC deletion (RHWA-1046 & RHWA-1047)
 
 Runs after test 9 in the same ordered suite. Once the SBRC has reconciled and bound shared
 storage, the test deletes the SBRC to exercise `handleDeletion` PV cleanup. For dynamically

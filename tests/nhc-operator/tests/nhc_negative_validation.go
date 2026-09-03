@@ -78,7 +78,6 @@ var _ = Describe("NHC Negative -- Validation and Webhook",
 				reportxml.ID("53769"),
 				Label(labels.TierAcceptance, labels.PlatformAny,
 					labels.ComponentWebhook), func() {
-
 					nhcName := nhcparams.NHCDuplicateTestName
 
 					By("Creating first NHC CR")
@@ -110,6 +109,7 @@ var _ = Describe("NHC Negative -- Validation and Webhook",
 						"Failed to list NHC CRs")
 
 					count := 0
+
 					for i := range nhcList.Items {
 						if nhcList.Items[i].GetName() == nhcName {
 							count++
@@ -128,7 +128,6 @@ var _ = Describe("NHC Negative -- Validation and Webhook",
 				reportxml.ID("51626"),
 				Label(labels.TierAcceptance, labels.PlatformAny,
 					labels.ComponentWebhook), func() {
-
 					nhcName := nhcparams.NHCInvalidValuesTestName
 
 					By("Creating NHC with negative minHealthy and duration values")
@@ -140,6 +139,7 @@ var _ = Describe("NHC Negative -- Validation and Webhook",
 					conditions := nhcUnhealthyConditions(spec)
 					cond, ok := conditions[0].(map[string]interface{})
 					Expect(ok).To(BeTrue(), "unhealthyConditions[0] is not a map")
+
 					cond["duration"] = "-30s"
 
 					err := APIClient.Create(ctx, nhc)
@@ -162,6 +162,7 @@ var _ = Describe("NHC Negative -- Validation and Webhook",
 					conditionsStr := nhcUnhealthyConditions(specStr)
 					condStr, ok := conditionsStr[0].(map[string]interface{})
 					Expect(ok).To(BeTrue(), "unhealthyConditions[0] is not a map")
+
 					condStr["duration"] = "string"
 
 					err = APIClient.Create(ctx, nhcStr)
@@ -180,7 +181,6 @@ var _ = Describe("NHC Negative -- Validation and Webhook",
 				reportxml.ID("61591"),
 				Label(labels.TierAcceptance, labels.PlatformAny,
 					labels.ComponentWebhook), func() {
-
 					nhcName := nhcparams.NHCEmptySelectorTestName
 
 					By("Creating NHC with empty matchExpressions selector")
@@ -212,7 +212,6 @@ var _ = Describe("NHC Negative -- Validation and Webhook",
 				reportxml.ID("51625"),
 				Label(labels.TierAcceptance, labels.PlatformAny,
 					labels.ComponentController), func() {
-
 					nhcName := nhcparams.NHCIncorrectTemplateTestName
 
 					By("Creating NHC with non-existent SNR template name")
@@ -221,6 +220,7 @@ var _ = Describe("NHC Negative -- Validation and Webhook",
 					spec := nhcSpec(nhc)
 					tmpl, ok := spec["remediationTemplate"].(map[string]interface{})
 					Expect(ok).To(BeTrue(), "NHC spec has no remediationTemplate map")
+
 					tmpl["name"] = "non-existent-template"
 
 					Expect(APIClient.Create(ctx, nhc)).To(Succeed(),
@@ -261,7 +261,6 @@ var _ = Describe("NHC Negative -- Validation and Webhook",
 				reportxml.ID("71184"),
 				Label(labels.TierAcceptance, labels.PlatformAny,
 					labels.ComponentController), func() {
-
 					nhcName := nhcparams.NHCMissingNsTestName
 
 					if !isSNRCRDInstalled(ctx) {
@@ -469,7 +468,6 @@ var _ = Describe("NHC Negative -- Zero Healthy Nodes",
 			reportxml.ID("56599"),
 			Label(labels.TierAcceptance, labels.PlatformAny,
 				labels.ComponentRemediation), func() {
-
 				nhcName := nhcparams.NHCZeroHealthyTestName
 
 				By("Creating NHC CR targeting single worker node")

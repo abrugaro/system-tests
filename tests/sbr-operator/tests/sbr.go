@@ -3,7 +3,9 @@ package tests
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -557,7 +559,247 @@ func waitForSBRCReady(sbrcName string) {
 
 		return nil
 	}, sbrparams.SBRCReadyTimeout, sbrparams.DefaultPollInterval).Should(Succeed(),
-		"SBRC %q agent DaemonSet must have all pods ready before functional tests begin", sbrcName)
+		// Gomega calls this lazily, only on timeout, so the diagnostics land directly in the
+		// Ginkgo [FAILED] block (and therefore in the Prow log) without any happy-path cost.
+		func() string {
+			return fmt.Sprintf(
+				"SBRC %q agent DaemonSet must have all pods ready before functional tests begin\n%s",
+				sbrcName, sbrcReadinessDiagnostics(sbrcName, dsName))
+		})
+}
+
+// sbrcReadinessDiagnostics gathers the cluster state that explains why an SBRC agent DaemonSet
+// has not become ready. The usual bottleneck is the first SBRC's cold start on a freshly
+// provisioned ODF/CephFS cluster: the SBD device PVC bind and the SBD device-init Job can lag,
+// leaving agent pods Pending. It lists (by dynamic discovery, never by assumed operator-internal
+// names) the DaemonSet status, the agent pods' container/scheduling state, every PVC and Job in
+// the operator namespace, and the most recent Warning events. Returned as a string so it can be a
+// lazily-evaluated Gomega failure description; every lookup is best-effort so one failure does not
+// mask the rest.
+func sbrcReadinessDiagnostics(sbrcName, dsName string) string {
+	// Bound the diagnostic API calls so a slow or wedged apiserver cannot hang the already-failed
+	// test while the failure description is being built.
+	ctx, cancel := context.WithTimeout(context.Background(), sbrparams.SBRCReadyDiagTimeout)
+	defer cancel()
+
+	namespace := medik8sparams.OperatorNs
+
+	var report strings.Builder
+
+	fmt.Fprintf(&report, "=== SBRC %q readiness diagnostics (namespace %s) ===\n", sbrcName, namespace)
+
+	agentDS, dsErr := APIClient.DaemonSets(namespace).Get(ctx, dsName, metav1.GetOptions{})
+	if dsErr != nil {
+		fmt.Fprintf(&report, "DaemonSet %s: GET failed: %v\n", dsName, dsErr)
+	} else {
+		dsStatus := agentDS.Status
+		fmt.Fprintf(&report,
+			"DaemonSet %s: desired=%d current=%d ready=%d available=%d updated=%d misscheduled=%d\n",
+			dsName, dsStatus.DesiredNumberScheduled, dsStatus.CurrentNumberScheduled, dsStatus.NumberReady,
+			dsStatus.NumberAvailable, dsStatus.UpdatedNumberScheduled, dsStatus.NumberMisscheduled)
+	}
+
+	// Prefer the DaemonSet's own label selector (discovered, not assumed) to find its agent pods;
+	// fall back to the "<dsName>-" name prefix when the DaemonSet itself could not be fetched.
+	podSelector := ""
+
+	if dsErr == nil && agentDS.Spec.Selector != nil {
+		if selector, selErr := metav1.LabelSelectorAsSelector(agentDS.Spec.Selector); selErr == nil {
+			podSelector = selector.String()
+		}
+	}
+
+	report.WriteString(agentPodDiagnostics(ctx, namespace, dsName, podSelector))
+	report.WriteString(pvcDiagnostics(ctx, namespace))
+	report.WriteString(jobDiagnostics(ctx, namespace))
+	report.WriteString(recentWarningEvents(ctx, namespace))
+
+	return report.String()
+}
+
+// agentPodDiagnostics reports the SBRC agent pods' scheduling/container state and the PVC each one
+// mounts. Pods are selected by the DaemonSet's label selector when known, otherwise by the
+// "<dsName>-" name prefix (DaemonSet pods are named "<dsName>-<hash>").
+func agentPodDiagnostics(ctx context.Context, namespace, dsName, podSelector string) string {
+	listOptions := metav1.ListOptions{}
+	if podSelector != "" {
+		listOptions.LabelSelector = podSelector
+	}
+
+	podList, err := APIClient.Pods(namespace).List(ctx, listOptions)
+	if err != nil {
+		return fmt.Sprintf("Pods: LIST failed: %v\n", err)
+	}
+
+	var report strings.Builder
+
+	found := false
+
+	for idx := range podList.Items {
+		agentPod := &podList.Items[idx]
+		if podSelector == "" && !strings.HasPrefix(agentPod.Name, dsName+"-") {
+			continue
+		}
+
+		found = true
+
+		fmt.Fprintf(&report, "Pod %s: phase=%s node=%q\n",
+			agentPod.Name, agentPod.Status.Phase, agentPod.Spec.NodeName)
+
+		for _, cond := range agentPod.Status.Conditions {
+			if cond.Status != corev1.ConditionTrue {
+				fmt.Fprintf(&report, "  condition %s=%s reason=%s msg=%s\n",
+					cond.Type, cond.Status, cond.Reason, cond.Message)
+			}
+		}
+
+		for _, vol := range agentPod.Spec.Volumes {
+			if vol.PersistentVolumeClaim != nil {
+				fmt.Fprintf(&report, "  volume %s -> PVC %s\n", vol.Name, vol.PersistentVolumeClaim.ClaimName)
+			}
+		}
+
+		for _, initStatus := range agentPod.Status.InitContainerStatuses {
+			report.WriteString("  init " + containerStateSummary(initStatus))
+		}
+
+		for _, ctrStatus := range agentPod.Status.ContainerStatuses {
+			report.WriteString("  " + containerStateSummary(ctrStatus))
+		}
+	}
+
+	if !found {
+		fmt.Fprintf(&report, "Pods: none found for DaemonSet %s\n", dsName)
+	}
+
+	return report.String()
+}
+
+// pvcDiagnostics reports every PVC in the namespace. The first SBRC's SBD device PVC bind is the
+// usual cold-start bottleneck, and a Pending PVC keeps the agent pods from starting.
+func pvcDiagnostics(ctx context.Context, namespace string) string {
+	pvcList, err := APIClient.PersistentVolumeClaims(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return fmt.Sprintf("PVCs: LIST failed: %v\n", err)
+	}
+
+	if len(pvcList.Items) == 0 {
+		return "PVCs: none in namespace\n"
+	}
+
+	var report strings.Builder
+
+	for idx := range pvcList.Items {
+		pvc := &pvcList.Items[idx]
+
+		storageClass := ""
+		if pvc.Spec.StorageClassName != nil {
+			storageClass = *pvc.Spec.StorageClassName
+		}
+
+		fmt.Fprintf(&report, "PVC %s: phase=%s storageClass=%q\n", pvc.Name, pvc.Status.Phase, storageClass)
+	}
+
+	return report.String()
+}
+
+// jobDiagnostics reports every Job in the namespace. The SBD device-init Job runs once per SBRC,
+// and a stuck or failed Job leaves the agent pods not ready.
+func jobDiagnostics(ctx context.Context, namespace string) string {
+	jobList, err := APIClient.K8sClient.BatchV1().Jobs(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return fmt.Sprintf("Jobs: LIST failed: %v\n", err)
+	}
+
+	if len(jobList.Items) == 0 {
+		return "Jobs: none in namespace\n"
+	}
+
+	var report strings.Builder
+
+	for idx := range jobList.Items {
+		job := &jobList.Items[idx]
+		fmt.Fprintf(&report, "Job %s: active=%d succeeded=%d failed=%d\n",
+			job.Name, job.Status.Active, job.Status.Succeeded, job.Status.Failed)
+	}
+
+	return report.String()
+}
+
+// containerStateSummary renders a single container's current state on one line for diagnostics.
+func containerStateSummary(containerStatus corev1.ContainerStatus) string {
+	switch {
+	case containerStatus.State.Waiting != nil:
+		return fmt.Sprintf("container %s: Waiting reason=%s msg=%s\n",
+			containerStatus.Name, containerStatus.State.Waiting.Reason, containerStatus.State.Waiting.Message)
+	case containerStatus.State.Terminated != nil:
+		return fmt.Sprintf("container %s: Terminated reason=%s exit=%d\n",
+			containerStatus.Name, containerStatus.State.Terminated.Reason, containerStatus.State.Terminated.ExitCode)
+	case containerStatus.State.Running != nil:
+		return fmt.Sprintf("container %s: Running ready=%t restarts=%d\n",
+			containerStatus.Name, containerStatus.Ready, containerStatus.RestartCount)
+	default:
+		return fmt.Sprintf("container %s: state unknown ready=%t\n", containerStatus.Name, containerStatus.Ready)
+	}
+}
+
+// recentWarningEvents returns up to SBRCReadyDiagMaxEvents of the most recent Warning events in
+// the namespace, newest first with age, formatted one per line for diagnostics.
+func recentWarningEvents(ctx context.Context, namespace string) string {
+	evList, err := APIClient.Events(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return fmt.Sprintf("Events: LIST failed: %v\n", err)
+	}
+
+	warnings := make([]corev1.Event, 0, len(evList.Items))
+
+	for idx := range evList.Items {
+		if evList.Items[idx].Type == corev1.EventTypeWarning {
+			warnings = append(warnings, evList.Items[idx])
+		}
+	}
+
+	if len(warnings) == 0 {
+		return "Events: no Warning events\n"
+	}
+
+	sort.Slice(warnings, func(i, j int) bool {
+		return eventTimestamp(warnings[i]).After(eventTimestamp(warnings[j]))
+	})
+
+	limit := len(warnings)
+	if limit > sbrparams.SBRCReadyDiagMaxEvents {
+		limit = sbrparams.SBRCReadyDiagMaxEvents
+	}
+
+	var report strings.Builder
+
+	fmt.Fprintf(&report, "Warning events (most recent %d of %d):\n", limit, len(warnings))
+
+	for idx := 0; idx < limit; idx++ {
+		event := warnings[idx]
+		age := time.Since(eventTimestamp(event)).Round(time.Second)
+		fmt.Fprintf(&report, "  %s %s/%s (%s ago): %s\n",
+			event.Reason, event.InvolvedObject.Kind, event.InvolvedObject.Name, age, event.Message)
+	}
+
+	return report.String()
+}
+
+// eventTimestamp returns the most representative timestamp for an Event, preferring the newer
+// Series/EventTime fields and falling back to the legacy timestamps, so "most recent" ordering is
+// correct on clusters that leave LastTimestamp unset.
+func eventTimestamp(event corev1.Event) time.Time {
+	switch {
+	case event.Series != nil && !event.Series.LastObservedTime.IsZero():
+		return event.Series.LastObservedTime.Time
+	case !event.LastTimestamp.IsZero():
+		return event.LastTimestamp.Time
+	case !event.EventTime.IsZero():
+		return event.EventTime.Time
+	default:
+		return event.FirstTimestamp.Time
+	}
 }
 
 var _ = Describe(

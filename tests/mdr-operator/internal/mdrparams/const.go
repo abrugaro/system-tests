@@ -67,4 +67,13 @@ const (
 	// ConditionReasonRemediationStarted is the reason set on Processing and Succeeded
 	// conditions when remediation begins.
 	ConditionReasonRemediationStarted = "RemediationStarted"
+
+	// MDRTNegativeTestName is the MDRT name used in negative validation tests.
+	MDRTNegativeTestName = "mdr-negative-test-template"
+
+	// MDRTInvalidTestName is a name that violates RFC 1123 subdomain rules.
+	MDRTInvalidTestName = "-1-invalid-value"
+
+	// MDRTInvalidTestNamespace is a syntactically valid namespace that does not exist.
+	MDRTInvalidTestNamespace = "mdr-test-nonexistent-ns"
 )

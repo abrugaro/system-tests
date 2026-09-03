@@ -199,3 +199,67 @@ Validates the full customer upgrade path: install GA FAR from redhat-operators o
 - **Env vars (optional, have defaults)**: `MEDIK8S_OPERATOR_PACKAGE` (default: `fence-agents-remediation`), `MEDIK8S_TARGET_CHANNEL` (default: `stable`)
 - **Standalone**: `ginkgo --label-filter="far && tier:upgrade" ./tests/far-operator/...`
 - **Pass criteria**: FAR deployment Ready on OCP N-1, OCP upgrade completes (Progressing=False, Available=True, Degraded=False), FAR deployment Ready after OCP upgrade, FAR CSV in Succeeded phase after catalog switch (new CSV if Konflux version is higher than GA, same CSV if versions match), controller image changes after operator upgrade (skipped on version parity), remediation succeeds after OCP upgrade and after catalog switch (node rebooted via boot ID change, node recovers to Ready), workload pods evicted after each fencing cycle
+
+### 17. Remediate a Control Plane Node and Verify etcd Quorum Preservation ([OCP-90217](https://polarion.engineering.redhat.com/polarion/#/project/OSE/workitem?id=OCP-90217))
+
+Fences any control plane node via fence_aws and verifies etcd quorum is preserved. Checks etcd ClusterOperator health before and after remediation. Creates a test workload pod pinned to the CP target node, then verifies it is evicted after fencing. Confirms the fenced CP node reboots (boot ID change), returns to Ready, the etcd ClusterOperator recovers (Available=True, Degraded=False), and the FAR CR reaches its terminal status conditions (Processing=False, FenceAgentActionSucceeded=True, Succeeded=True). FAR lifecycle Events are deliberately not asserted on a control-plane target: Kubernetes Events are best-effort and can be dropped during the apiserver/etcd disruption the CP reboot causes, so the durable CR status conditions prove the outcome instead (the full Event bundle is still asserted on the worker specs).
+
+- **Operators**: FAR
+- **Cluster**: AWS IPI, 3 control plane nodes (etcd quorum requires majority)
+- **Storage**: None
+- **Environment**: Connected
+- **Labels**: `tier:acceptance`, `disruption:destructive`, `platform:aws`, `frequency:weekly`, `component:remediation`, `topology:control-plane`
+- **Env vars (required)**: AWS credentials provisioned by the `medik8s-aws-credentials` CI step
+- **Standalone**: `ginkgo --label-filter="far && topology:control-plane" ./tests/far-operator/...`
+- **Pass criteria**: etcd ClusterOperator healthy before and after remediation, CP node rebooted (boot ID change), CP node returns to Ready, workload pod evicted from CP node, FAR CR status conditions Processing=False, FenceAgentActionSucceeded=True, Succeeded=True (FAR lifecycle Events are not asserted on a control-plane target - they are best-effort and can be dropped during the CP reboot's apiserver/etcd disruption)
+
+### 18. Fence Leader and Complete FAR Remediation with Only 2 Schedulable Workers ([OCP-90218](https://polarion.engineering.redhat.com/polarion/#/project/OSE/workitem?id=OCP-90218))
+
+Simulates a minimal 2-worker topology by cordoning extra workers, then fences the FAR leader node via fence_aws, forcing leader election failover to the surviving worker. Verifies the surviving worker takes over leadership and completes remediation despite degraded capacity (at least 1 FAR replica stays Running), workloads are evicted, and FAR recovers to 2 replicas once the cordoned capacity is restored (the fenced node stays NoSchedule-tainted until its CR is deleted, so the recovered replica lands on an uncordoned worker).
+
+- **Operators**: FAR
+- **Cluster**: AWS IPI, 2+ worker nodes (extra workers are cordoned to simulate topology)
+- **Storage**: None
+- **Environment**: Connected
+- **Labels**: `tier:acceptance`, `disruption:destructive`, `platform:aws`, `frequency:weekly`, `component:remediation`, `topology:minimal-worker`
+- **Env vars (required)**: AWS credentials provisioned by the `medik8s-aws-credentials` CI step
+- **Standalone**: `ginkgo --label-filter="far && topology:minimal-worker" ./tests/far-operator/...`
+- **Pass criteria**: At least 1 FAR replica Running during degraded capacity, leader node rebooted (boot ID change), leader node returns to Ready, workload pod evicted, FAR recovers to 2 replicas after schedulable capacity is restored
+
+### 19. Verify FAR Deployment Unavailability with Zero Schedulable Workers ([OCP-90308](https://polarion.engineering.redhat.com/polarion/#/project/OSE/workitem?id=OCP-90308))
+
+Validates FAR operator behavior when all worker nodes are cordoned, simulating a 0-worker topology. Cordons all workers, deletes FAR pods to force reschedule attempts, verifies the deployment reports 0 Ready replicas, then uncordons workers and verifies FAR recovers to full replica count.
+
+- **Operators**: FAR
+- **Cluster**: AWS IPI, 1+ worker nodes (all cordoned to simulate 0-worker topology)
+- **Storage**: None
+- **Environment**: Connected
+- **Labels**: `tier:acceptance`, `disruption:destructive`, `platform:aws`, `frequency:weekly`, `component:controller`, `topology:zero-worker`
+- **Env vars (required)**: AWS credentials provisioned by the `medik8s-aws-credentials` CI step
+- **Standalone**: `ginkgo --label-filter="far && topology:zero-worker" ./tests/far-operator/...`
+- **Pass criteria**: FAR deployment Ready before test, FAR deployment has 0 Ready replicas after pods deleted on cordoned workers, FAR deployment recovers to 2 Ready replicas after uncordoning
+
+### 20. Verify FAR Must-Gather Collection During Active Remediation ([OCP-61480](https://polarion.engineering.redhat.com/polarion/#/project/OSE/workitem?id=OCP-61480))
+
+Triggers a FAR remediation on a non-leader worker node, waits for the Processing condition, then runs `oc adm must-gather` with the medik8s image and validates the collected output. Confirms the must-gather image captures FAR operator data while a remediation is actively in progress.
+
+- **Operators**: FAR v0.8.0+
+- **Cluster**: AWS, 3+ Ready worker nodes
+- **Storage**: None
+- **Environment**: Connected (must-gather image must be pullable)
+- **Labels**: `disruption:destructive`, `platform:aws`, `component:controller`, `tier:acceptance`, `frequency:weekly`
+- **Env vars (optional, has default)**: `MUST_GATHER_IMAGE` (overrides the default medik8s must-gather image)
+- **Standalone**: `ginkgo --label-filter="far" --focus="must-gather during active remediation" ./tests/far-operator/...`
+- **Pass criteria**: must-gather output contains a node YAML for every cluster node, FAR CRD definitions, and operator namespace resources; the fenced node reboots (boot ID changes) and returns Ready
+
+### 21. Verify FAR Timed-Out Remediation Retry Logging ([OCP-70873](https://polarion.engineering.redhat.com/polarion/#/project/OSE/workitem?id=OCP-70873))
+
+Deletes the FAR controller pods to isolate logs, then creates a FAR CR with an invalid AWS instance ID so every fence attempt fails, and verifies the active controller logs one failure entry per retry. Confirms the retry mechanism logs failure messages matching the configured retry count.
+
+- **Operators**: FAR v0.8.0+
+- **Cluster**: AWS, 3+ Ready worker nodes
+- **Storage**: None
+- **Environment**: Connected
+- **Labels**: `disruption:nondestructive`, `platform:aws`, `component:remediation`, `tier:acceptance`, `frequency:weekly`
+- **Standalone**: `ginkgo --label-filter="far" --focus="timeout messages matching retry count" ./tests/far-operator/...`
+- **Pass criteria**: the active FAR controller log contains exactly 10 (`FARCRRetryCount`) `command failed` entries, one per retry

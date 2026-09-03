@@ -138,7 +138,6 @@ var _ = Describe("NHC Status Field Tracking",
 			reportxml.ID("53093"),
 			Label(labels.TierAcceptance, labels.PlatformAny,
 				labels.ComponentRemediation), func() {
-
 				nhcName := nhcparams.NHCStatusTestName
 
 				By("Creating NHC CR for workers")

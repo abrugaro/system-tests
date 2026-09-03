@@ -23,6 +23,10 @@ const (
 	// ExpectedReplicas defines the expected number of replicas for SBR controller manager.
 	ExpectedReplicas = int32(2)
 
+	// MinReplicasWhenDegraded is the minimum number of controller pods/replicas that must remain
+	// available during the single-worker degraded phase (only the keeper node is schedulable).
+	MinReplicasWhenDegraded = int32(1)
+
 	// ManagerContainerName is the name of the main controller container in the SBR pod.
 	ManagerContainerName = "manager"
 
@@ -97,8 +101,20 @@ const (
 	SBRAgentDaemonSetPrefix = "sbr-agent-"
 
 	// SBRCReadyTimeout is the time allowed for the SBRC's agent DaemonSet to have all scheduled
-	// pods reach Ready before a functional test begins.
-	SBRCReadyTimeout = 7 * time.Minute
+	// pods reach Ready before a functional test begins. The first SBRC created in a suite pays a
+	// one-time cold-start cost (first CephFS PVC bind plus SBD device-init Job on a freshly
+	// provisioned ODF cluster); later SBRCs reuse the warmed CSI path and become ready in ~90s.
+	// The ceiling is sized for that worst-case cold start - a ready DaemonSet returns immediately,
+	// so healthy runs never wait this long.
+	SBRCReadyTimeout = 10 * time.Minute
+
+	// SBRCReadyDiagMaxEvents caps how many recent Warning events are included in the on-timeout
+	// readiness diagnostics dumped by waitForSBRCReady, to keep the failure message readable.
+	SBRCReadyDiagMaxEvents = 15
+
+	// SBRCReadyDiagTimeout bounds the API calls made while collecting on-timeout readiness
+	// diagnostics, so a slow or wedged apiserver cannot hang the already-failed test.
+	SBRCReadyDiagTimeout = 30 * time.Second
 
 	// WatchdogProbeLogTimeout is the deadline for reading a completed watchdog probe pod's logs
 	// via the in-cluster API.
@@ -275,6 +291,53 @@ const (
 	// deleted after the operator patches their reclaimPolicy to Delete.
 	// The NFS provisioner's async delete cycle can take over 60s.
 	UnknownProvPVCleanupTimeout = 3 * time.Minute
+	// MustGatherOCTimeout is the --timeout flag passed to oc adm must-gather so it cleans up gracefully.
+	MustGatherOCTimeout = 14 * time.Minute
+
+	// MustGatherContextTimeout is the outer Go context timeout, strictly greater than MustGatherOCTimeout.
+	MustGatherContextTimeout = 16 * time.Minute
+
+	// MustGatherImageEnvVar overrides the must-gather image (e.g. a mirrored ref on disconnected clusters).
+	MustGatherImageEnvVar = "MUST_GATHER_IMAGE"
+
+	// DefaultMustGatherImage is the upstream medik8s must-gather image, matching the FAR suite.
+	// The :latest tag is intentional so the test exercises the must-gather build a user would actually
+	// pull; the resolved image digest is logged on every run (see runMustGather) so a failure is
+	// reproducible against the exact build, and MustGatherImageEnvVar overrides it when a specific ref
+	// is needed.
+	DefaultMustGatherImage = "quay.io/medik8s/must-gather:latest"
+
+	// MustGatherImageInfoTimeout bounds the best-effort `oc image info` digest lookup.
+	MustGatherImageInfoTimeout = 1 * time.Minute
+
+	// MustGatherCleanupTimeout is the deadline for best-effort cleanup of leftover must-gather namespaces.
+	MustGatherCleanupTimeout = 2 * time.Minute
+
+	// ControllerLeaseName is the SBR leader election lease name (LeaderElectionID in cmd/main.go).
+	ControllerLeaseName = "sbr-operator-leader-election"
+
+	// ControllerHandoverTimeout is how long to wait for controller leadership transfer after pod deletion.
+	ControllerHandoverTimeout = 3 * time.Minute
+
+	// MinWorkerNodesForResilienceTest is the minimum number of worker-only nodes required to
+	// safely run the controller resilience test (cordon all but one) without touching control-plane capacity.
+	MinWorkerNodesForResilienceTest = 3
+
+	// ControllerRescheduleTimeout is how long to wait for the controller to reach a stable degraded
+	// state (>= 1 ready replica) after cordoning workers and deleting pods from cordoned nodes.
+	ControllerRescheduleTimeout = 5 * time.Minute
+
+	// ControllerScaleBackTimeout is how long to wait for the controller deployment to return to
+	// ExpectedReplicas after uncordoning all worker nodes.
+	ControllerScaleBackTimeout = 5 * time.Minute
+
+	// ControllerDegradedConsistentDuration is how long to Consistently assert the controller
+	// remains available during the single-worker degraded phase.
+	ControllerDegradedConsistentDuration = 30 * time.Second
+
+	// MinWorkerNodesForHandoverTest is the minimum number of schedulable worker-only nodes
+	// required for the leadership handover test (needs 2 replicas on different nodes).
+	MinWorkerNodesForHandoverTest = 2
 )
 
 // AgentExpectedMetricNames lists the Prometheus metric names that must be present in the agent output.

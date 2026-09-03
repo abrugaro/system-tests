@@ -115,6 +115,36 @@ const (
 	// TestRemediationClusterRoleBindingName is the ClusterRoleBinding for the above role.
 	TestRemediationClusterRoleBindingName = "test-remediation-binding"
 
+	// MultipleTemplatesSupportAnnotation on a remediation template tells the NHC webhook that
+	// multiple templates of the same Kind may be used within one escalation chain.
+	MultipleTemplatesSupportAnnotation = "remediation.medik8s.io/multiple-templates-support"
+
+	// MultiTemplateKind is a dedicated dummy remediation-template Kind used only by the
+	// multiple-templates-support acceptance test (OCP-74932). A dedicated Kind keeps the
+	// webhook's cluster-wide template List scoped to this test's two annotated CRs, isolated
+	// from other specs' TestRemediationTemplate CRs.
+	MultiTemplateKind = "MultiTemplateRemediationTemplate"
+
+	// MultiTemplateCRDName is the CRD name for MultiTemplateKind.
+	MultiTemplateCRDName = "multitemplateremediationtemplates.test.medik8s.io"
+
+	// MultiTemplateName1 is the first annotated MultiTemplateRemediationTemplate CR used to verify
+	// the webhook accepts multiple templates of the same Kind (OCP-74932).
+	MultiTemplateName1 = "multi-template-1"
+
+	// MultiTemplateName2 is the second annotated MultiTemplateRemediationTemplate CR used to verify
+	// the webhook accepts multiple templates of the same Kind (OCP-74932).
+	MultiTemplateName2 = "multi-template-2"
+
+	// MultiTemplateClusterRoleName is the ClusterRole granting the NHC controller-manager SA
+	// get/list/watch on multitemplateremediationtemplates. The webhook lists this Kind cluster-wide
+	// (as the controller SA) to check the multiple-templates-support annotation; without this RBAC
+	// the List returns Forbidden and the webhook rejects the duplicate-kind escalation (OCP-74932).
+	MultiTemplateClusterRoleName = "multi-template-cluster-role"
+
+	// MultiTemplateClusterRoleBindingName is the ClusterRoleBinding for the above role.
+	MultiTemplateClusterRoleBindingName = "multi-template-binding"
+
 	// NHCControllerServiceAccount is the NHC controller's ServiceAccount name.
 	NHCControllerServiceAccount = "node-healthcheck-controller-manager"
 
@@ -168,4 +198,54 @@ const (
 
 	// NHCReasonRemediating is the expected reason substring during active remediation.
 	NHCReasonRemediating = "remediating"
+
+	// TestRemediationUnhealthyDuration is the unhealthyConditions duration for the
+	// TestRemediation functional builder, kept short so remediation triggers quickly.
+	TestRemediationUnhealthyDuration = "10s"
+
+	// EscalationUnhealthyDuration is the unhealthyConditions duration for the escalation builder.
+	EscalationUnhealthyDuration = "30s"
+
+	// Escalation test constants (RHWA-1245).
+
+	// NHCEscalationEditTestName is the NHC CR name for the edit-during-remediation test.
+	NHCEscalationEditTestName = "nhc-test-escalation-edit"
+
+	// NHCEscalationValidationPrefix is the NHC CR name prefix for escalation validation tests.
+	NHCEscalationValidationPrefix = "nhc-test-esc-val"
+
+	// EscalationFirstStepTimeout is the timeout string for a valid escalation step (the 60s webhook minimum).
+	EscalationFirstStepTimeout = "60s"
+
+	// EscalationLongTimeout is a long timeout string for TestRemediation steps
+	// where we need remediation to remain in-progress for the duration of a test.
+	EscalationLongTimeout = "600s"
+
+	// EscalationWebhookOrderRequired is the expected error substring when the order field is
+	// omitted. The field is a required CRD property, so the apiserver schema error carries the
+	// field path (e.g. "escalatingRemediations[0].order"); ".order" avoids matching generic prose.
+	EscalationWebhookOrderRequired = ".order"
+
+	// EscalationWebhookDuplicateOrder is the expected webhook error for duplicate order values.
+	EscalationWebhookDuplicateOrder = "duplicate order"
+
+	// EscalationWebhookTimeoutRequired is the expected error substring when the timeout field is
+	// omitted. The field is a required CRD property, so the apiserver schema error carries the
+	// field path (e.g. "escalatingRemediations[0].timeout"); ".timeout" avoids matching an
+	// unrelated connection/context timeout error.
+	EscalationWebhookTimeoutRequired = ".timeout"
+
+	// EscalationWebhookTimeoutMinimum is the expected webhook error for timeout < 60s.
+	EscalationWebhookTimeoutMinimum = "at least"
+
+	// EscalationWebhookDuplicateKind is the expected webhook error for duplicate remediator Kind.
+	EscalationWebhookDuplicateKind = "same kind"
+
+	// EscalationWebhookUpdateProhibited is the expected webhook error field name when editing
+	// escalating remediations while remediation is in progress.
+	EscalationWebhookUpdateProhibited = "escalating remediations"
+
+	// EscalationWebhookOngoingRemediation is the expected webhook error reason when editing
+	// escalating remediations while remediation is in progress.
+	EscalationWebhookOngoingRemediation = "prohibited due to running remediation"
 )

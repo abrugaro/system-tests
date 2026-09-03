@@ -110,6 +110,7 @@ All `It`/`DescribeTable` specs should be labelled using constants from `tests/in
 | Disruption | `disruption:destructive`, `disruption:nondestructive`                                                              |
 | Component  | `component:controller`, `component:remediation`, `component:webhook`, `component:metrics`, `component:post-deploy` |
 | Platform   | `platform:aws`, `platform:baremetal`, `platform:any`                                                               |
+| Topology   | `topology:control-plane`, `topology:minimal-worker`, `topology:zero-worker`                                        |
 
 ### Key Conventions
 

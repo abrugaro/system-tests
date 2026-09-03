@@ -21,6 +21,11 @@ const (
 	// ManagerContainerName is the name of the main controller container in the FAR pod.
 	ManagerContainerName = "manager"
 
+	// DiagnosticsLogTailLines is how many trailing lines of the active FAR
+	// controller log to dump when a destructive test fails, enough to capture
+	// the reconcile that stalled without flooding the test output.
+	DiagnosticsLogTailLines = 100
+
 	// FenceAgentsRemediationCRDName is the full CRD name for FenceAgentsRemediation.
 	FenceAgentsRemediationCRDName = "fenceagentsremediations.fence-agents-remediation.medik8s.io"
 	// FenceAgentsRemediationTemplateCRDName is the full CRD name for FenceAgentsRemediationTemplate.
@@ -64,9 +69,6 @@ const (
 	// NodeReadyTimeout is how long to wait for a node to become Ready after reboot.
 	NodeReadyTimeout = 10 * time.Minute
 
-	// NodeNotReadyTimeout is how long to wait for a node to become NotReady after kubelet stop.
-	NodeNotReadyTimeout = 5 * time.Minute
-
 	// NodeRebootTimeout is how long to wait for a node reboot to complete.
 	NodeRebootTimeout = 6 * time.Minute
 
@@ -75,6 +77,15 @@ const (
 
 	// FARConditionTimeout is how long to wait for a FAR CR condition to appear.
 	FARConditionTimeout = 2 * time.Minute
+
+	// EventVerifyTimeout is how long to wait for Kubernetes lifecycle events to
+	// appear. Longer than FARConditionTimeout because event delivery lags the CR
+	// condition and the shared, rate-limited API client can throttle event List
+	// calls during the destructive suite.
+	EventVerifyTimeout = 5 * time.Minute
+	// EventVerifyInterval is the poll interval for event verification. Longer than
+	// DefaultPollInterval to reduce List pressure on the shared rate-limited client.
+	EventVerifyInterval = 10 * time.Second
 
 	// RemediationCRDeletionTimeout is how long to wait for a FAR/FART CR to be fully deleted.
 	RemediationCRDeletionTimeout = 2 * time.Minute
@@ -123,6 +134,58 @@ const (
 	// SharedCredentialsSecretName is the Secret created by the test suite to hold
 	// fence agent credentials in the format expected by SharedSecretName.
 	SharedCredentialsSecretName = "far-test-shared-credentials"
+
+	// MinControlPlaneNodes is the minimum Ready CP nodes needed for safe CP remediation.
+	MinControlPlaneNodes = 3
+
+	// CPRebootTimeout is how long to wait for a CP node reboot (slower than worker due to etcd).
+	CPRebootTimeout = 10 * time.Minute
+	// CPNodeReadyTimeout is how long to wait for a CP node to return Ready after reboot.
+	CPNodeReadyTimeout = 12 * time.Minute
+	// EtcdRejoinTimeout is how long to wait for etcd ClusterOperator to recover.
+	EtcdRejoinTimeout = 10 * time.Minute
+
+	// MinWorkersForDestructiveTests is the minimum Ready workers for standard destructive tests.
+	MinWorkersForDestructiveTests = 3
+	// MinWorkersForTwoWorkerTest is the minimum Ready workers for the 2-worker topology test.
+	MinWorkersForTwoWorkerTest = 2
+
+	// TestCordonAnnotation marks nodes cordoned by the test for cleanup identification.
+	TestCordonAnnotation = "system-tests.medik8s.io/cordoned-for-topology-test"
+
+	// MustGatherImageEnvVar is the environment variable that overrides the must-gather image.
+	MustGatherImageEnvVar = "MUST_GATHER_IMAGE"
+	// DefaultMustGatherImage is the default medik8s must-gather container image.
+	// The :latest tag is intentional: this suite validates that must-gather collects
+	// the correct FAR data using the build a customer would actually pull, not a
+	// pinned must-gather version. The resolved image digest is logged on every run
+	// (see farutils.RunMustGather) so a failure is reproducible against the exact
+	// build, and MUST_GATHER_IMAGE overrides this default when a specific ref is needed.
+	DefaultMustGatherImage = "quay.io/medik8s/must-gather:latest"
+	// MustGatherTimeout is how long to allow `oc adm must-gather` to run.
+	MustGatherTimeout = 10 * time.Minute
+
+	// TimedOutBadInstanceID is an invalid AWS EC2 instance ID that forces fence_aws
+	// to fail with InvalidInstanceID.NotFound on every retry attempt.
+	TimedOutBadInstanceID = "i-00000000000000000"
+	// TimedOutLogPattern matches per-retry fence agent failure log entries.
+	// The FAR controller logs FenceAgentFailedCommandMessage ("command failed")
+	// exactly once per failed retry in cliexecuter.go runWithRetry().
+	TimedOutLogPattern = `command failed`
+	// TimedOutRetryBuffer is extra time per retry to account for fence agent execution overhead.
+	TimedOutRetryBuffer = 30 * time.Second
+	// ControllerPodReadyTimeout is how long to wait for controller pods to become Ready after deletion.
+	ControllerPodReadyTimeout = 2 * time.Minute
+
+	// MinWorkersForObservabilityTests is the minimum number of Ready worker nodes the
+	// observability suite requires: ExpectedReplicas (the FAR controller pods, spread
+	// across that many distinct nodes for HA per OCP-61222) plus 1. The must-gather spec
+	// reboots a randomly selected non-leader worker (SelectWorkerNode excludes only the
+	// leader), which may be the node hosting the second replica; OutOfServiceTaint then
+	// evicts that replica, and anti-affinity forbids the leader's node, so a spare Ready
+	// worker must exist for it to reschedule onto while the target reboots. The timed-out
+	// spec needs only ExpectedReplicas nodes; this gate is driven by must-gather.
+	MinWorkersForObservabilityTests = int(ExpectedReplicas) + 1
 )
 
 // WorkloadTestImage is the container image used for test workload pods.

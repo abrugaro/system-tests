@@ -115,3 +115,28 @@ and returns to schedulable state.
 - **Environment**: Connected or disconnected
 - **Standalone**: `ginkgo --label-filter="operator:nmo" --focus="Stop node maintenance" ./tests/nmo-operator/...`
 - **Pass criteria**: NodeMaintenance CR is fully deleted; target node is uncordoned (Unschedulable=false) and medik8s.io/drain taint removed; RemovedMaintenance event emitted; maintenance lease deleted
+
+### 9. Reject a Second NodeMaintenance With a Duplicate Name ([OCP-29632](https://polarion.engineering.redhat.com/polarion/#/project/OSE/workitem?id=OCP-29632))
+
+Creates a NodeMaintenance CR on one worker and drives it to maintenance, then
+attempts to create a second CR that reuses the same name (targeting a fresh
+schedulable worker -- the first node is now cordoned -- so the collision is on the
+object name, not the node) and verifies the API server rejects it.
+
+- **Operators**: NMO v0.17.0+
+- **Cluster**: MNO with at least 2 schedulable worker nodes
+- **Environment**: Connected or disconnected
+- **Standalone**: `ginkgo --label-filter="operator:nmo" --focus="duplicate name" ./tests/nmo-operator/...`
+- **Pass criteria**: First NodeMaintenance CR is created and reaches Succeeded phase; the second create with the same name fails with an error whose message contains `nodemaintenances.nodemaintenance.medik8s.io "node-maintenance-test" already exists`; cleanup then attempts (best-effort, logged if incomplete) to delete the CR and wait for the target node to return to Ready and uncordoned
+
+### 10. Reject a Second NodeMaintenance for a Node Already Under Maintenance ([OCP-29630](https://polarion.engineering.redhat.com/polarion/#/project/OSE/workitem?id=OCP-29630))
+
+Creates a NodeMaintenance CR for a worker and drives it to maintenance, then
+attempts to create a second CR (different name) for the same node and verifies the
+NMO validating webhook rejects it.
+
+- **Operators**: NMO v0.17.0+
+- **Cluster**: MNO with at least 2 schedulable worker nodes
+- **Environment**: Connected or disconnected
+- **Standalone**: `ginkgo --label-filter="operator:nmo" --focus="already under maintenance" ./tests/nmo-operator/...`
+- **Pass criteria**: First NodeMaintenance CR is created and reaches Succeeded phase; the second create for the same node fails with a webhook error whose message contains `NodeMaintenance for node <node> already exists`; cleanup then attempts (best-effort, logged if incomplete) to delete both CR names and wait for the target node to return to Ready and uncordoned

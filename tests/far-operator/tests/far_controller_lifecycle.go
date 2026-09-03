@@ -45,25 +45,39 @@ var _ = Describe("FAR Controller Lifecycle Tests",
 			func() {
 				By("Getting the current active FAR controller pod")
 
-				pods, err := farutils.GetFARControllerPods(ctx, APIClient)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(pods).ToNot(BeEmpty(), "No running FAR controller pods found")
+				// Leader election is eventually-consistent: a prior destructive spec
+				// (the 0-worker test deletes FAR pods; fencing specs evict them) can
+				// leave the controller Lease naming a pod that no longer exists until
+				// re-election updates it. Retry until the Lease resolves to a live,
+				// Running controller pod instead of failing on a one-shot lookup.
+				var (
+					oldLeaderPod  *corev1.Pod
+					oldLeaderNode string
+				)
 
-				oldLeaderNode, err := farutils.GetActiveFARControllerNode(ctx, APIClient)
-				Expect(err).ToNot(HaveOccurred())
+				Eventually(func(assertion Gomega) {
+					pods, err := farutils.GetFARControllerPods(ctx, APIClient)
+					assertion.Expect(err).ToNot(HaveOccurred())
+					assertion.Expect(pods).ToNot(BeEmpty(), "No running FAR controller pods found")
 
-				var oldLeaderPod *corev1.Pod
+					leaderNode, err := farutils.GetActiveFARControllerNode(ctx, APIClient)
+					assertion.Expect(err).ToNot(HaveOccurred())
 
-				for i := range pods {
-					if pods[i].Spec.NodeName == oldLeaderNode {
-						oldLeaderPod = &pods[i]
+					oldLeaderPod = nil
 
-						break
+					for i := range pods {
+						if pods[i].Spec.NodeName == leaderNode {
+							oldLeaderPod = &pods[i]
+
+							break
+						}
 					}
-				}
 
-				Expect(oldLeaderPod).ToNot(BeNil(),
-					"Could not find controller pod on leader node %s", oldLeaderNode)
+					assertion.Expect(oldLeaderPod).ToNot(BeNil(),
+						"Lease leader node %s has no Running controller pod yet", leaderNode)
+					oldLeaderNode = leaderNode
+				}, farparams.ControllerHandoverTimeout, farparams.DefaultPollInterval).Should(Succeed(),
+					"controller lease did not resolve to a live controller pod")
 
 				oldPodName := oldLeaderPod.Name
 				GinkgoWriter.Printf("Active controller pod: %s on node %s\n",

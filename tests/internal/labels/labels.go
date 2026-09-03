@@ -63,4 +63,11 @@ const (
 	PlatformBareMetal = "platform:baremetal"
 	// PlatformAny marks tests that run on any platform.
 	PlatformAny = "platform:any"
+
+	// TopologyControlPlane marks tests targeting control plane nodes.
+	TopologyControlPlane = "topology:control-plane"
+	// TopologyMinimalWorker marks tests with reduced worker count.
+	TopologyMinimalWorker = "topology:minimal-worker"
+	// TopologyZeroWorker marks tests with zero schedulable workers.
+	TopologyZeroWorker = "topology:zero-worker"
 )

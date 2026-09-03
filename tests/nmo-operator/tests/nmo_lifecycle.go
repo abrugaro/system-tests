@@ -55,39 +55,13 @@ var _ = Describe(
 
 			By("Selecting a schedulable worker node")
 
-			workerNodes, err := nodes.List(
-				APIClient,
-				metav1.ListOptions{LabelSelector: "node-role.kubernetes.io/worker"},
-			)
-			Expect(err).ToNot(HaveOccurred(), "Failed to list worker nodes")
+			eligible, err := listSchedulableWorkers(context.Background())
+			Expect(err).ToNot(HaveOccurred(), "Failed to list schedulable worker nodes")
+			Expect(len(eligible)).To(BeNumerically(">=", nmoparams.MinWorkerNodesForMaintenance),
+				"At least %d schedulable worker nodes are required (one for maintenance, one for cluster health)",
+				nmoparams.MinWorkerNodesForMaintenance)
 
-			var eligible []*nodes.Builder
-
-			for _, node := range workerNodes {
-				nodeLabels := node.Object.Labels
-
-				if _, hasMaster := nodeLabels["node-role.kubernetes.io/master"]; hasMaster {
-					continue
-				}
-
-				if _, hasCP := nodeLabels["node-role.kubernetes.io/control-plane"]; hasCP {
-					continue
-				}
-
-				if node.Object.Spec.Unschedulable {
-					continue
-				}
-
-				if helpers.IsNodeReady(node.Object) {
-					eligible = append(eligible, node)
-				}
-			}
-
-			Expect(eligible).ToNot(BeEmpty(), "No eligible worker nodes found")
-			Expect(len(eligible)).To(BeNumerically(">=", 2),
-				"At least 2 schedulable worker nodes are required (one for maintenance, one for cluster health)")
-
-			targetNodeName = eligible[0].Object.Name
+			targetNodeName = selectSchedulableWorker(context.Background())
 			nmCRName = fmt.Sprintf("test-maintenance-%s", targetNodeName)
 
 			By(fmt.Sprintf("Selected worker node: %s", targetNodeName))
@@ -175,17 +149,7 @@ var _ = Describe(
 					"Failed to create NodeMaintenance CR")
 
 				By("Waiting for NodeMaintenance to reach Succeeded phase")
-				Eventually(func() nmov1beta1.MaintenancePhase {
-					current := &nmov1beta1.NodeMaintenance{}
-
-					err := APIClient.Get(context.Background(), client.ObjectKey{Name: nmCRName}, current)
-					if err != nil {
-						return ""
-					}
-
-					return current.Status.Phase
-				}, nmoparams.MaintenanceTimeout, nmoparams.DefaultPollInterval).Should(Equal(nmov1beta1.MaintenanceSucceeded),
-					"NodeMaintenance did not reach Succeeded phase")
+				waitForMaintenanceSucceeded(context.Background(), nmCRName)
 
 				By("Verifying target node is cordoned and drain taint is applied")
 				assertNodeCordonAndTaint(targetNodeName, true, nmoparams.MaintenanceTimeout)

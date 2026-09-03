@@ -75,6 +75,21 @@ container or pod level). Only checks the `manager` container.
 - **Standalone**: `ginkgo --label-filter="mdr" --focus="runs as non-root" ./tests/mdr-operator/...`
 - **Pass criteria**: Pod runAsNonRoot=true; expected manager container exists; manager container runAsUser != 0; allowPrivilegeEscalation=false; readOnlyRootFilesystem=true; capabilities.drop=[ALL]; seccomp profile RuntimeDefault
 
+## Negative Validation Tests
+
+### 5. Verify MDRT With Invalid Values Is Rejected ([OCP-60889](https://polarion.engineering.redhat.com/polarion/#/project/OSE/workitem?id=OCP-60889))
+
+Validates that the API server rejects MachineDeletionRemediationTemplate CRs
+with invalid metadata. First attempts creation with a non-existent namespace
+(`mdr-test-nonexistent-ns`), then with an invalid name (`-1-invalid-value`)
+that violates RFC 1123 subdomain rules.
+
+- **Operators**: MDR v0.7.0+
+- **Cluster**: Any topology (MNO or SNO)
+- **Environment**: Connected or disconnected
+- **Standalone**: `ginkgo --label-filter="mdr" --focus="invalid values" ./tests/mdr-operator/...`
+- **Pass criteria**: MDRT with non-existent namespace rejected with NotFound error; MDRT with invalid name rejected with Invalid error (k8serrors.IsInvalid)
+
 ## Destructive Tests -- NHC-Triggered Remediation
 
 Tests that stop kubelet on a worker node, let NHC detect the unhealthy node
@@ -88,7 +103,7 @@ provider provisions a new VM. The node is re-created (new creation timestamp).
 - At least 2 Ready worker nodes (target + spare for cluster schedulability)
 - `KUBECONFIG` set with cluster-admin access
 
-### 5. MDR Remediation with Condition Transitions ([OCP-66138](https://polarion.engineering.redhat.com/polarion/#/project/OSE/workitem?id=OCP-66138))
+### 6. MDR Remediation with Condition Transitions ([OCP-66138](https://polarion.engineering.redhat.com/polarion/#/project/OSE/workitem?id=OCP-66138))
 
 Stops kubelet on a worker node. NHC detects the unhealthy node and creates
 an MDR CR via the MDR template. Verifies the MDR CR status conditions

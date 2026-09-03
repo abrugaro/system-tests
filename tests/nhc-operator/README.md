@@ -330,3 +330,71 @@ SNR reboots the node for automatic recovery.
 - **Environment**: Connected or disconnected
 - **Standalone**: `ginkgo --label-filter="nhc && disruption:destructive" --focus="non-remediating NHC" ./tests/nhc-operator/...`
 - **Pass criteria**: Second NHC phase is not Remediating, Delete() succeeds (asserted), first NHC returns to Enabled after SNR remediation, node recovers
+
+### 17. Escalation Order Field Validation ([OCP-60863](https://polarion.engineering.redhat.com/polarion/#/project/OSE/workitem?id=OCP-60863))
+
+Exercises webhook validation of the `order` field in escalatingRemediations.
+Rejection cases: creating NHC CRs with a missing order field and with
+duplicate order values -- verifies the webhook rejects both and the CRs are
+not persisted. Acceptance case: creating an NHC CR with very large order
+values (9999999998 / 9999999999) -- verifies the webhook accepts it and the
+CR is created.
+
+- **Operators**: NHC v0.12.0+
+- **Cluster**: Any (no node disruption)
+- **Environment**: Connected or disconnected
+- **Standalone**: `ginkgo --label-filter="nhc && disruption:nondestructive" --focus="order field validation" ./tests/nhc-operator/...`
+- **Pass criteria**: API returns error containing "order" for missing order and "duplicate order" for duplicate values, with the CR not created in either rejection case; NHC creation with very large order values succeeds and the CR is persisted
+
+### 18. Escalation Timeout Field Required and Minimum Value ([OCP-60862](https://polarion.engineering.redhat.com/polarion/#/project/OSE/workitem?id=OCP-60862))
+
+Attempts to create NHC CRs with escalatingRemediations that have a missing
+timeout field and a timeout below the 60s minimum. Verifies the webhook
+rejects both.
+
+- **Operators**: NHC v0.12.0+
+- **Cluster**: Any (no node disruption)
+- **Environment**: Connected or disconnected
+- **Standalone**: `ginkgo --label-filter="nhc && disruption:nondestructive" --focus="timeout field is required" ./tests/nhc-operator/...`
+- **Pass criteria**: API returns error containing "timeout" for missing timeout, "at least" for below-minimum timeout, CR not created in either case
+
+### 19. Duplicate Remediator Kind Forbidden ([OCP-66838](https://polarion.engineering.redhat.com/polarion/#/project/OSE/workitem?id=OCP-66838))
+
+Attempts to create an NHC CR with two escalation steps using the same
+remediator Kind (two TestRemediation templates). Uses TestRemediation
+because SNR supports multiple templates of the same Kind (via the
+`multiple-templates-support` annotation). Verifies the webhook rejects
+the duplicate for remediators that do not support this feature.
+
+- **Operators**: NHC v0.12.0+
+- **Cluster**: Any (no node disruption)
+- **Environment**: Connected or disconnected
+- **Standalone**: `ginkgo --label-filter="nhc && disruption:nondestructive" --focus="duplicate remediator kind" ./tests/nhc-operator/...`
+- **Pass criteria**: API returns error containing "same kind", CR not created
+
+### 20. Multiple Same-Kind Templates Accepted ([OCP-74932](https://polarion.engineering.redhat.com/polarion/#/project/OSE/workitem?id=OCP-74932))
+
+Companion to the negative case above: creates two `TestRemediationTemplate` CRs
+of the same Kind that both carry the `multiple-templates-support` annotation, then
+creates an NHC CR with escalating remediations referencing both. Verifies the
+webhook accepts multiple templates of the same Kind when every template of that
+Kind supports the feature.
+
+- **Operators**: NHC v0.12.0+
+- **Cluster**: Any (no node disruption)
+- **Environment**: Connected or disconnected
+- **Standalone**: `ginkgo --label-filter="nhc && disruption:nondestructive" --focus="accepted when templates support multiple" ./tests/nhc-operator/...`
+- **Pass criteria**: NHC CR is created and persisted
+
+### 21. Escalation Order Change Rejected During Active Remediation ([OCP-60865](https://polarion.engineering.redhat.com/polarion/#/project/OSE/workitem?id=OCP-60865))
+
+Creates an NHC with escalating remediations (TestRemediation then SNR),
+stops kubelet on a worker to trigger remediation, waits for the
+TestRemediation CR to appear, then attempts to swap the escalation order
+values. Verifies the webhook rejects the update while remediation is active.
+
+- **Operators**: NHC v0.12.0+, SNR
+- **Cluster**: Multi-node (2+ workers), SSH access to worker nodes
+- **Environment**: Connected or disconnected
+- **Standalone**: `ginkgo --label-filter="nhc && disruption:destructive" --focus="order change is rejected" ./tests/nhc-operator/...`
+- **Pass criteria**: TestRemediation CR created, update rejected with error containing "escalating remediations", node recovers after kubelet restart

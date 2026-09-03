@@ -54,7 +54,6 @@ var _ = Describe("NHC Template Management -- Template Watch",
 			reportxml.ID("71185"),
 			Label(labels.TierAcceptance, labels.PlatformAny,
 				labels.ComponentController), func() {
-
 				if !isSNRCRDInstalled(ctx) {
 					Skip("SelfNodeRemediation CRD not found -- OCP-71185 requires SNRT")
 				}
@@ -213,7 +212,6 @@ var _ = Describe("NHC Template Management -- Custom Remediation",
 			reportxml.ID("61976"),
 			Label(labels.TierAcceptance, labels.PlatformAny,
 				labels.ComponentRemediation), func() {
-
 				By("Setting up TestRemediation CRDs and RBAC")
 
 				setupTestRemediationResources(ctx)
@@ -273,10 +271,22 @@ var _ = Describe("NHC Template Management -- Custom Remediation",
 					WithTimeout(nhcparams.NodeNotReadyTimeout).Should(BeTrue(),
 					"TestRemediation CR should be created for node %s", targetWorkerName)
 
-				By("Starting kubelet to recover the node")
+				By("Starting kubelet to recover the node (best-effort)")
 
-				Expect(startKubeletForRemediation(ctx, targetWorkerName)).To(Succeed(),
-					"Failed to start kubelet on %s", targetWorkerName)
+				// Best-effort SSH kubelet restart. If the AWS Nitro hardware
+				// watchdog has already rebooted the node (it fires ~60-90s after
+				// kubelet stops heartbeating), the SSH lands mid-reboot and fails
+				// with "Connection timed out during banner exchange". That is
+				// expected and harmless: kubelet auto-starts on boot, so the
+				// WaitForNodeReady gate below is the real recovery check. MUST NOT
+				// use Expect here (matches the JustAfterEach and the other NHC specs).
+				if sshErr := startKubeletForRemediation(ctx, targetWorkerName); sshErr != nil {
+					GinkgoWriter.Printf(
+						"WARNING: SSH kubelet restart failed for %s: %v\n",
+						targetWorkerName, sshErr)
+					AddReportEntry("ssh-kubelet-restart-failed",
+						fmt.Sprintf("node %s: %v", targetWorkerName, sshErr))
+				}
 
 				By("Waiting for node to become Ready")
 

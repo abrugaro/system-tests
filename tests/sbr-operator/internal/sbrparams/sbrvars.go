@@ -35,6 +35,13 @@ var (
 		"StorageBasedRemediationTemplate",
 	}
 
+	// SBRCRDNames lists the full CRD names (plural.group) for all SBR custom resource definitions.
+	SBRCRDNames = []string{
+		"storagebasedremediationconfigs." + CRDGroup,
+		"storagebasedremediations." + CRDGroup,
+		"storagebasedremediationtemplates." + CRDGroup,
+	}
+
 	// RequiredAnnotations defines the required annotations and expected values for SBR CSV.
 	RequiredAnnotations = map[string]string{
 		"features.operators.openshift.io/tls-profiles":     "false",
