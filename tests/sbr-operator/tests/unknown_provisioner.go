@@ -216,7 +216,7 @@ var _ = Describe(
 
 					if pvc.Spec.StorageClassName != nil && *pvc.Spec.StorageClassName == fakeSC {
 						return fmt.Errorf("stale PVC %q still references fake SC %q — operator likely blocked "+
-							"by AlreadyExists on testRWXSupport (see RHWA-1017 / PR #60)",
+							"by AlreadyExists on testRWXSupport",
 							testPVCName, fakeSC)
 					}
 
@@ -244,7 +244,7 @@ var _ = Describe(
 				}, sbrparams.UnknownProvReconcileTimeout, sbrparams.DefaultPollInterval).Should(Succeed(),
 					"testRWXSupport should delete transient PVC %q after validating RWX access", testPVCName)
 
-				By("Waiting for SBRC agent DaemonSet pods to reach Ready (not CrashLoopBackOff)")
+				By("Waiting for SBRC agent DaemonSet pods to reach Ready")
 
 				waitForSBRCReady(sbrparams.UnknownProvSBRCName)
 
