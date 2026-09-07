@@ -291,6 +291,14 @@ const (
 	// deleted after the operator patches their reclaimPolicy to Delete.
 	// The NFS provisioner's async delete cycle can take over 60s.
 	UnknownProvPVCleanupTimeout = 3 * time.Minute
+
+	// UnknownProvChurnCheckDuration is how long to Consistently observe the cluster while the
+	// SBRC is alive. RHWA-1047 reports testRWXSupport churn about every 36s; 90s covers multiple
+	// reconcile cycles without a fixed sleep.
+	UnknownProvChurnCheckDuration = 90 * time.Second
+
+	// UnknownProvChurnCheckInterval is the poll interval for RHWA-1046/1047 Consistently checks.
+	UnknownProvChurnCheckInterval = 10 * time.Second
 	// MustGatherOCTimeout is the --timeout flag passed to oc adm must-gather so it cleans up gracefully.
 	MustGatherOCTimeout = 14 * time.Minute
 

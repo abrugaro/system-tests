@@ -3,6 +3,7 @@ package tests
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -16,6 +17,7 @@ import (
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 )
 
@@ -24,10 +26,10 @@ func stalePVCName(sbrcName string) string {
 	return sbrcName + "-rwx-test"
 }
 
-// stuckReleasedPVsForSC returns PVs stuck in Released state with Retain policy
-// for the given StorageClass. A PV in Released with Delete policy is expected
-// to be cleaned up by Kubernetes and is not considered "stuck".
-func stuckReleasedPVsForSC(scName string) ([]string, error) {
+// releasedRetainPVsForSC lists PVs in Released phase with Retain reclaim policy for the given
+// StorageClass. PVs in Released with Delete policy are expected to be reclaimed by Kubernetes
+// and are not counted — RHWA-1046 is about Retain-backed orphans from testRWXSupport.
+func releasedRetainPVsForSC(scName string) ([]string, error) {
 	pvList, err := APIClient.CoreV1Interface.PersistentVolumes().List(
 		context.TODO(), metav1.ListOptions{})
 	if err != nil {
@@ -42,22 +44,156 @@ func stuckReleasedPVsForSC(scName string) ([]string, error) {
 			continue
 		}
 
-		if pv.Status.Phase == corev1.VolumeReleased {
-			claimRef := "none"
-			if pv.Spec.ClaimRef != nil {
-				claimRef = fmt.Sprintf("%s/%s", pv.Spec.ClaimRef.Namespace, pv.Spec.ClaimRef.Name)
-			}
-
-			GinkgoWriter.Printf("PV %s: phase=%s reclaimPolicy=%s claimRef=%s\n",
-				pv.Name, pv.Status.Phase, pv.Spec.PersistentVolumeReclaimPolicy, claimRef)
-
-			if pv.Spec.PersistentVolumeReclaimPolicy == corev1.PersistentVolumeReclaimRetain {
-				stuck = append(stuck, pv.Name)
-			}
+		if pv.Status.Phase == corev1.VolumeReleased &&
+			pv.Spec.PersistentVolumeReclaimPolicy == corev1.PersistentVolumeReclaimRetain {
+			stuck = append(stuck, pv.Name)
 		}
 	}
 
 	return stuck, nil
+}
+
+// describeReleasedRetainPVs returns a single-line debug summary for Released+Retain PV names.
+func describeReleasedRetainPVs(pvNames []string) string {
+	if len(pvNames) == 0 {
+		return "none"
+	}
+
+	var parts []string
+
+	for _, pvName := range pvNames {
+		pv, getErr := APIClient.CoreV1Interface.PersistentVolumes().Get(
+			context.TODO(), pvName, metav1.GetOptions{})
+		if getErr != nil {
+			parts = append(parts, fmt.Sprintf("%s (get failed: %v)", pvName, getErr))
+
+			continue
+		}
+
+		claimRef := "none"
+		if pv.Spec.ClaimRef != nil {
+			claimRef = fmt.Sprintf("%s/%s", pv.Spec.ClaimRef.Namespace, pv.Spec.ClaimRef.Name)
+		}
+
+		parts = append(parts, fmt.Sprintf("%s phase=%s reclaimPolicy=%s claimRef=%s",
+			pv.Name, pv.Status.Phase, pv.Spec.PersistentVolumeReclaimPolicy, claimRef))
+	}
+
+	return strings.Join(parts, "; ")
+}
+
+func rwxTestPVCAbsent(pvcName string) error {
+	_, getErr := APIClient.CoreV1Interface.PersistentVolumeClaims(medik8sparams.OperatorNs).Get(
+		context.TODO(), pvcName, metav1.GetOptions{})
+	if k8serrors.IsNotFound(getErr) {
+		return nil
+	}
+
+	if getErr != nil {
+		return getErr
+	}
+
+	return fmt.Errorf("RWX test PVC %q exists in namespace %s", pvcName, medik8sparams.OperatorNs)
+}
+
+// logSBRCRWXConditions prints any SBRC status condition whose type mentions RWX (best-effort).
+func logSBRCRWXConditions(sbrcName string) {
+	obj := buildSBRC(sbrcName, map[string]interface{}{})
+
+	getErr := APIClient.Get(context.TODO(),
+		types.NamespacedName{Name: sbrcName, Namespace: medik8sparams.OperatorNs}, obj)
+	if getErr != nil {
+		GinkgoWriter.Printf("SBRC %q status: could not read conditions: %v\n", sbrcName, getErr)
+
+		return
+	}
+
+	conditions, found, nestedErr := unstructured.NestedSlice(obj.Object, "status", "conditions")
+	if nestedErr != nil || !found {
+		GinkgoWriter.Printf("SBRC %q status: no conditions in status\n", sbrcName)
+
+		return
+	}
+
+	for _, raw := range conditions {
+		condMap, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		condType, _, _ := unstructured.NestedString(condMap, "type")
+		if !strings.Contains(strings.ToLower(condType), "rwx") {
+			continue
+		}
+
+		condStatus, _, _ := unstructured.NestedString(condMap, "status")
+		condReason, _, _ := unstructured.NestedString(condMap, "reason")
+		condMessage, _, _ := unstructured.NestedString(condMap, "message")
+		GinkgoWriter.Printf("SBRC %q condition %s=%s reason=%s message=%s\n",
+			sbrcName, condType, condStatus, condReason, condMessage)
+	}
+}
+
+// waitForUnknownProvStorageReconciled waits until the operator completes the storage-related
+// reconciliation for an unknown-provisioner SBRC: SharedStorageReady=True, shared-storage PVC
+// bound to nfs-sbr-dynamic, and the transient rwx-test PVC absent. This gate matches the
+// RHWA-1017/1046/1047 scope without requiring agent pods Ready (watchdog may be unavailable on VMs).
+func waitForUnknownProvStorageReconciled(sbrcName string) {
+	sharedPVCName := sbrcName + "-shared-storage"
+	testPVCName := stalePVCName(sbrcName)
+
+	Eventually(func() error {
+		obj := buildSBRC(sbrcName, map[string]interface{}{})
+
+		getErr := APIClient.Get(context.TODO(),
+			types.NamespacedName{Name: sbrcName, Namespace: medik8sparams.OperatorNs}, obj)
+		if getErr != nil {
+			return fmt.Errorf("SBRC %q: %w", sbrcName, getErr)
+		}
+
+		cond := getSBRCRCondition(obj, "SharedStorageReady")
+		if cond == nil {
+			return fmt.Errorf("SBRC %q: SharedStorageReady condition not yet present", sbrcName)
+		}
+
+		if cond["status"] != string(corev1.ConditionTrue) {
+			msg, _ := cond["message"].(string)
+
+			return fmt.Errorf("SBRC %q: SharedStorageReady=%v (%s)", sbrcName, cond["status"], msg)
+		}
+
+		pvc, pvcErr := APIClient.CoreV1Interface.PersistentVolumeClaims(medik8sparams.OperatorNs).Get(
+			context.TODO(), sharedPVCName, metav1.GetOptions{})
+		if pvcErr != nil {
+			return fmt.Errorf("SBRC %q: shared-storage PVC %q: %w", sbrcName, sharedPVCName, pvcErr)
+		}
+
+		if pvc.Status.Phase != corev1.ClaimBound {
+			return fmt.Errorf("SBRC %q: shared-storage PVC %q phase=%s (expected Bound)",
+				sbrcName, sharedPVCName, pvc.Status.Phase)
+		}
+
+		if pvc.Spec.StorageClassName == nil || *pvc.Spec.StorageClassName != sbrparams.UnknownProvSCName {
+			sc := "<nil>"
+			if pvc.Spec.StorageClassName != nil {
+				sc = *pvc.Spec.StorageClassName
+			}
+
+			return fmt.Errorf("SBRC %q: shared-storage PVC %q storageClass=%q (expected %q)",
+				sbrcName, sharedPVCName, sc, sbrparams.UnknownProvSCName)
+		}
+
+		if err := rwxTestPVCAbsent(testPVCName); err != nil {
+			return fmt.Errorf("SBRC %q: %w", sbrcName, err)
+		}
+
+		GinkgoWriter.Printf("SBRC %q storage reconciliation OK: SharedStorageReady=True, "+
+			"PVC %q Bound, rwx-test PVC absent\n", sbrcName, sharedPVCName)
+
+		return nil
+	}, sbrparams.UnknownProvReconcileTimeout, sbrparams.DefaultPollInterval).Should(Succeed(),
+		"SBRC %q storage reconciliation should complete (SharedStorageReady, shared-storage Bound, rwx-test absent)",
+		sbrcName)
 }
 
 var _ = Describe(
@@ -116,11 +252,12 @@ var _ = Describe(
 
 			By("Cleaning up any stuck Released PVs from a prior run")
 
-			stuck, listErr := stuckReleasedPVsForSC(sbrparams.UnknownProvSCName)
+			stuck, listErr := releasedRetainPVsForSC(sbrparams.UnknownProvSCName)
 			Expect(listErr).ToNot(HaveOccurred(), "Failed to list PVs")
 
 			for _, pvName := range stuck {
-				GinkgoWriter.Printf("Deleting leftover stuck Released PV %q\n", pvName)
+				GinkgoWriter.Printf("Deleting leftover Released+Retain PV %q (%s)\n",
+					pvName, describeReleasedRetainPVs([]string{pvName}))
 				_ = APIClient.CoreV1Interface.PersistentVolumes().Delete(
 					context.TODO(), pvName, metav1.DeleteOptions{})
 			}
@@ -150,7 +287,7 @@ var _ = Describe(
 
 			By("Cleaning up any leftover stuck Released PVs")
 
-			stuck, _ := stuckReleasedPVsForSC(sbrparams.UnknownProvSCName)
+			stuck, _ := releasedRetainPVsForSC(sbrparams.UnknownProvSCName)
 			for _, pvName := range stuck {
 				_ = APIClient.CoreV1Interface.PersistentVolumes().Delete(
 					context.TODO(), pvName, metav1.DeleteOptions{})
@@ -191,11 +328,15 @@ var _ = Describe(
 						context.TODO(), testPVCName, metav1.DeleteOptions{})
 				})
 
-				By(fmt.Sprintf("Creating SBRC %q pointing to SC %q (unknown provisioner triggers testRWXSupport)",
+				By(fmt.Sprintf("Creating SBRC %q with detectOnlyMode and SC %q (unknown provisioner triggers testRWXSupport)",
 					sbrparams.UnknownProvSBRCName, sbrparams.UnknownProvSCName))
 
 				sbrc := buildSBRC(sbrparams.UnknownProvSBRCName, map[string]interface{}{
+					"detectOnlyMode":     "Enabled",
 					"sharedStorageClass": sbrparams.UnknownProvSCName,
+					"nodeSelector": map[string]interface{}{
+						"node-role.kubernetes.io/worker": "",
+					},
 				})
 				Expect(APIClient.Create(context.TODO(), sbrc)).To(Succeed(),
 					"SBRC %q must be created successfully", sbrparams.UnknownProvSBRCName)
@@ -229,32 +370,102 @@ var _ = Describe(
 					testPVCName))
 
 				Eventually(func() error {
-					_, getErr := APIClient.CoreV1Interface.PersistentVolumeClaims(medik8sparams.OperatorNs).Get(
-						context.TODO(), testPVCName, metav1.GetOptions{})
-					if k8serrors.IsNotFound(getErr) {
-						return nil
-					}
-
-					if getErr != nil {
-						return getErr
-					}
-
-					return fmt.Errorf("RWX test PVC %q still present — testRWXSupport cleanup likely did not run",
-						testPVCName)
+					return rwxTestPVCAbsent(testPVCName)
 				}, sbrparams.UnknownProvReconcileTimeout, sbrparams.DefaultPollInterval).Should(Succeed(),
 					"testRWXSupport should delete transient PVC %q after validating RWX access", testPVCName)
 
-				By("Waiting for SBRC agent DaemonSet pods to reach Ready")
+				By("Waiting for SBRC storage reconciliation (SharedStorageReady, shared-storage Bound, rwx-test absent)")
 
-				waitForSBRCReady(sbrparams.UnknownProvSBRCName)
+				waitForUnknownProvStorageReconciled(sbrparams.UnknownProvSBRCName)
 
 				sbrcReconciled = true
 			})
 
-		It("Verify shared-storage PV is not left in Released state after SBRC deletion (RHWA-1046 & RHWA-1047)",
+		It("Verify Released PVs from testRWXSupport do not accumulate while SBRC is alive (RHWA-1046)",
 			func() {
 				if !sbrcReconciled {
-					Skip("SBRC did not reconcile in the previous test (RHWA-1017 failed) — PVs were never consumed")
+					Skip("SBRC did not reconcile in RHWA-1017 test — cannot observe testRWXSupport PV churn")
+				}
+
+				scName := sbrparams.UnknownProvSCName
+
+				By(fmt.Sprintf("Waiting for no Released+Retain PVs on StorageClass %q after initial testRWXSupport",
+					scName))
+
+				Eventually(func() error {
+					stuck, listErr := releasedRetainPVsForSC(scName)
+					if listErr != nil {
+						return listErr
+					}
+
+					if len(stuck) > 0 {
+						return fmt.Errorf("RHWA-1046: %d Released+Retain PV(s) on SC %q after testRWXSupport — "+
+							"backing PVs should be deleted, not left Released: %s",
+							len(stuck), scName, describeReleasedRetainPVs(stuck))
+					}
+
+					return nil
+				}, sbrparams.UnknownProvReconcileTimeout, sbrparams.DefaultPollInterval).Should(Succeed(),
+					"Released+Retain PV count for SC %q should return to zero after testRWXSupport", scName)
+
+				By(fmt.Sprintf("Verifying Released+Retain PV count does not accumulate on SC %q "+
+					"while SBRC %q remains (RHWA-1046 accumulation regression; a brief count of 1 "+
+					"during testRWXSupport cleanup is expected)",
+					scName, sbrparams.UnknownProvSBRCName))
+
+				Consistently(func() error {
+					stuck, listErr := releasedRetainPVsForSC(scName)
+					if listErr != nil {
+						return listErr
+					}
+
+					// The bug leaves every backing PV in Released+Retain (count grows 1, 2, 3…).
+					// With the fix, testRWXSupport may briefly leave one Released PV while the PVC
+					// is deleted and the backing PV is reclaimed — count returns to 0. Tolerate that
+					// transient; fail only when multiple orphans accumulate.
+					if len(stuck) > 1 {
+						return fmt.Errorf("RHWA-1046: Released+Retain PV count reached %d on SC %q — "+
+							"testRWXSupport likely re-runs every reconcile without deleting backing PVs: %s",
+							len(stuck), scName, describeReleasedRetainPVs(stuck))
+					}
+
+					return nil
+				}, sbrparams.UnknownProvChurnCheckDuration, sbrparams.UnknownProvChurnCheckInterval).Should(Succeed(),
+					"Released+Retain PV count should not accumulate while SBRC %q is alive", sbrparams.UnknownProvSBRCName)
+			})
+
+		It("Verify testRWXSupport does not recreate the RWX test PVC on every reconcile (RHWA-1047)",
+			func() {
+				if !sbrcReconciled {
+					Skip("SBRC did not reconcile in RHWA-1017 test — cannot observe testRWXSupport PVC churn")
+				}
+
+				testPVCName := stalePVCName(sbrparams.UnknownProvSBRCName)
+
+				By(fmt.Sprintf("Recording SBRC status conditions related to RWX verification for %q",
+					sbrparams.UnknownProvSBRCName))
+				logSBRCRWXConditions(sbrparams.UnknownProvSBRCName)
+
+				By(fmt.Sprintf("Consistently verifying RWX test PVC %q stays absent while SBRC %q remains "+
+					"(RHWA-1047 testRWXSupport churn regression)",
+					testPVCName, sbrparams.UnknownProvSBRCName))
+
+				Consistently(func() error {
+					if err := rwxTestPVCAbsent(testPVCName); err != nil {
+						return fmt.Errorf("RHWA-1047: %w — testRWXSupport likely runs on every reconcile "+
+							"instead of caching the RWX result", err)
+					}
+
+					return nil
+				}, sbrparams.UnknownProvChurnCheckDuration, sbrparams.UnknownProvChurnCheckInterval).Should(Succeed(),
+					"RWX test PVC %q should not be recreated while SBRC %q is alive", testPVCName,
+					sbrparams.UnknownProvSBRCName)
+			})
+
+		It("Verify shared-storage PV is cleaned up after SBRC deletion (RHWA-1046)",
+			func() {
+				if !sbrcReconciled {
+					Skip("SBRC did not reconcile in RHWA-1017 test — shared-storage PVC was never created")
 				}
 
 				sharedPVCName := sbrparams.UnknownProvSBRCName + "-shared-storage"
@@ -292,7 +503,8 @@ var _ = Describe(
 					pv, getErr := APIClient.CoreV1Interface.PersistentVolumes().Get(
 						context.TODO(), sharedPVName, metav1.GetOptions{})
 					if k8serrors.IsNotFound(getErr) {
-						GinkgoWriter.Println("Shared-storage PV deleted (reclaimPolicy was patched to Delete) — fix verified")
+						GinkgoWriter.Printf("Shared-storage PV %q deleted after SBRC removal (reclaimPolicy patched to Delete)\n",
+							sharedPVName)
 
 						return nil
 					}
@@ -303,8 +515,9 @@ var _ = Describe(
 
 					if pv.Status.Phase == corev1.VolumeReleased &&
 						pv.Spec.PersistentVolumeReclaimPolicy == corev1.PersistentVolumeReclaimRetain {
-						return fmt.Errorf("shared-storage PV %q is in Released state with Retain policy — "+
-							"reclaimPolicy was NOT patched to Delete (bug present, see PR #62)", sharedPVName)
+						return fmt.Errorf("RHWA-1046: shared-storage PV %q is Released+Retain after SBRC delete — "+
+							"handleDeletion should patch reclaimPolicy to Delete: %s",
+							sharedPVName, describeReleasedRetainPVs([]string{sharedPVName}))
 					}
 
 					GinkgoWriter.Printf("Shared-storage PV %s: phase=%s reclaimPolicy=%s (ok)\n",
@@ -312,6 +525,6 @@ var _ = Describe(
 
 					return nil
 				}, sbrparams.UnknownProvPVCleanupTimeout, sbrparams.DefaultPollInterval).Should(Succeed(),
-					"Shared-storage PV should not remain in Released+Retain state after SBRC deletion")
+					"Shared-storage PV should not remain Released+Retain after SBRC deletion")
 			})
 	})
