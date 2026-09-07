@@ -39,14 +39,14 @@ func releasedRetainPVsForSC(scName string) ([]string, error) {
 	var stuck []string
 
 	for i := range pvList.Items {
-		pv := &pvList.Items[i]
-		if pv.Spec.StorageClassName != scName {
+		persistentVolume := &pvList.Items[i]
+		if persistentVolume.Spec.StorageClassName != scName {
 			continue
 		}
 
-		if pv.Status.Phase == corev1.VolumeReleased &&
-			pv.Spec.PersistentVolumeReclaimPolicy == corev1.PersistentVolumeReclaimRetain {
-			stuck = append(stuck, pv.Name)
+		if persistentVolume.Status.Phase == corev1.VolumeReleased &&
+			persistentVolume.Spec.PersistentVolumeReclaimPolicy == corev1.PersistentVolumeReclaimRetain {
+			stuck = append(stuck, persistentVolume.Name)
 		}
 	}
 
