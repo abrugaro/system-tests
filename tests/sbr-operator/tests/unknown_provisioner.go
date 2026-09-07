@@ -62,7 +62,7 @@ func describeReleasedRetainPVs(pvNames []string) string {
 	var parts []string
 
 	for _, pvName := range pvNames {
-		pv, getErr := APIClient.CoreV1Interface.PersistentVolumes().Get(
+		persistentVolume, getErr := APIClient.CoreV1Interface.PersistentVolumes().Get(
 			context.TODO(), pvName, metav1.GetOptions{})
 		if getErr != nil {
 			parts = append(parts, fmt.Sprintf("%s (get failed: %v)", pvName, getErr))
@@ -71,12 +71,12 @@ func describeReleasedRetainPVs(pvNames []string) string {
 		}
 
 		claimRef := "none"
-		if pv.Spec.ClaimRef != nil {
-			claimRef = fmt.Sprintf("%s/%s", pv.Spec.ClaimRef.Namespace, pv.Spec.ClaimRef.Name)
+		if persistentVolume.Spec.ClaimRef != nil {
+			claimRef = fmt.Sprintf("%s/%s", persistentVolume.Spec.ClaimRef.Namespace, persistentVolume.Spec.ClaimRef.Name)
 		}
 
 		parts = append(parts, fmt.Sprintf("%s phase=%s reclaimPolicy=%s claimRef=%s",
-			pv.Name, pv.Status.Phase, pv.Spec.PersistentVolumeReclaimPolicy, claimRef))
+			persistentVolume.Name, persistentVolume.Status.Phase, persistentVolume.Spec.PersistentVolumeReclaimPolicy, claimRef))
 	}
 
 	return strings.Join(parts, "; ")
@@ -174,13 +174,13 @@ func waitForUnknownProvStorageReconciled(sbrcName string) {
 		}
 
 		if pvc.Spec.StorageClassName == nil || *pvc.Spec.StorageClassName != sbrparams.UnknownProvSCName {
-			sc := "<nil>"
+			storageClass := "<nil>"
 			if pvc.Spec.StorageClassName != nil {
-				sc = *pvc.Spec.StorageClassName
+				storageClass = *pvc.Spec.StorageClassName
 			}
 
 			return fmt.Errorf("SBRC %q: shared-storage PVC %q storageClass=%q (expected %q)",
-				sbrcName, sharedPVCName, sc, sbrparams.UnknownProvSCName)
+				sbrcName, sharedPVCName, storageClass, sbrparams.UnknownProvSCName)
 		}
 
 		if err := rwxTestPVCAbsent(testPVCName); err != nil {
