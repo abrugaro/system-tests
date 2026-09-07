@@ -214,7 +214,7 @@ var _ = Describe(
 			By(fmt.Sprintf("Checking StorageClass %q exists",
 				sbrparams.UnknownProvSCName))
 
-			sc, scErr := APIClient.StorageV1Interface.StorageClasses().Get(
+			storageClass, scErr := APIClient.StorageV1Interface.StorageClasses().Get(
 				context.TODO(), sbrparams.UnknownProvSCName, metav1.GetOptions{})
 			if k8serrors.IsNotFound(scErr) {
 				Skip(fmt.Sprintf("StorageClass %q not found — NFS dynamic provisioner not deployed, "+
@@ -225,7 +225,7 @@ var _ = Describe(
 				"Failed to get StorageClass %q", sbrparams.UnknownProvSCName)
 
 			GinkgoWriter.Printf("StorageClass %q found: provisioner=%s reclaimPolicy=%s\n",
-				sc.Name, sc.Provisioner, *sc.ReclaimPolicy)
+				storageClass.Name, storageClass.Provisioner, *storageClass.ReclaimPolicy)
 
 			By("Cleaning up any stale test SBRC from a prior run")
 
@@ -500,7 +500,7 @@ var _ = Describe(
 					"(handleDeletion should patch reclaimPolicy to Delete)", sharedPVName))
 
 				Eventually(func() error {
-					pv, getErr := APIClient.CoreV1Interface.PersistentVolumes().Get(
+					persistentVolume, getErr := APIClient.CoreV1Interface.PersistentVolumes().Get(
 						context.TODO(), sharedPVName, metav1.GetOptions{})
 					if k8serrors.IsNotFound(getErr) {
 						GinkgoWriter.Printf("Shared-storage PV %q deleted after SBRC removal (reclaimPolicy patched to Delete)\n",
@@ -513,15 +513,15 @@ var _ = Describe(
 						return getErr
 					}
 
-					if pv.Status.Phase == corev1.VolumeReleased &&
-						pv.Spec.PersistentVolumeReclaimPolicy == corev1.PersistentVolumeReclaimRetain {
+					if persistentVolume.Status.Phase == corev1.VolumeReleased &&
+						persistentVolume.Spec.PersistentVolumeReclaimPolicy == corev1.PersistentVolumeReclaimRetain {
 						return fmt.Errorf("RHWA-1046: shared-storage PV %q is Released+Retain after SBRC delete — "+
 							"handleDeletion should patch reclaimPolicy to Delete: %s",
 							sharedPVName, describeReleasedRetainPVs([]string{sharedPVName}))
 					}
 
 					GinkgoWriter.Printf("Shared-storage PV %s: phase=%s reclaimPolicy=%s (ok)\n",
-						pv.Name, pv.Status.Phase, pv.Spec.PersistentVolumeReclaimPolicy)
+						persistentVolume.Name, persistentVolume.Status.Phase, persistentVolume.Spec.PersistentVolumeReclaimPolicy)
 
 					return nil
 				}, sbrparams.UnknownProvPVCleanupTimeout, sbrparams.DefaultPollInterval).Should(Succeed(),
